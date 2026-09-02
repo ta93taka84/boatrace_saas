@@ -27,7 +27,14 @@ def connect():
 
 
 def load_pipeline_output(path: Path):
-    """pipeline.py が出力した日次JSONを取り込む。"""
+    """pipeline.py や jobs.py が出力した日次JSONを取り込む。"""
+    # 締切が近いレースが無い時間帯は prerace が何も書かない。
+    # 「取り込むものが無い」は正常な状態なので、失敗にしない。
+    # ここで落とすと、異常が無いのに失敗通知が飛んでしまう。
+    if not path.exists():
+        print(f"{path} がありません。取り込むデータなしとして終了します。")
+        return
+
     data = json.loads(path.read_text(encoding="utf-8"))
     race_date = _to_date(data["date"])
 
