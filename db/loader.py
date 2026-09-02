@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -23,7 +24,38 @@ def connect():
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise SystemExit("DATABASE_URL が未設定です。Supabaseの接続文字列を渡してください。")
-    return psycopg.connect(dsn)
+
+    try:
+        return psycopg.connect(dsn)
+    except psycopg.OperationalError as e:
+        # DATABASE_URLはシークレットなのでログに出ない。そのままだと
+        # 何が悪いのか分からないため、パスワードを伏せたホスト名だけ出す。
+        raise SystemExit(f"{_describe_dsn(dsn)}\n接続に失敗しました: {e}") from e
+
+
+def _describe_dsn(dsn: str) -> str:
+    """接続先の診断情報を、認証情報を伏せた形で組み立てる。"""
+    parsed = urlparse(dsn)
+    host, port = parsed.hostname or "?", parsed.port or "?"
+    lines = [f"接続先: {host}:{port} (user={parsed.username or '?'})"]
+
+    if "pooler" not in host:
+        lines.append(
+            "ホスト名に 'pooler' が含まれていません。Supabaseの Direct connection は\n"
+            "IPv6専用で、GitHub ActionsのランナーはIPv4のみのため接続できません。\n"
+            "Supabaseの Connect から 'Session pooler' の接続文字列を選び直してください。"
+        )
+    if parsed.port == 6543:
+        lines.append(
+            "ポート6543は Transaction pooler です。psycopgのプリペアドステートメントと\n"
+            "相性が悪いため、ポート5432の Session pooler を使ってください。"
+        )
+    if parsed.password and parsed.password.startswith("["):
+        lines.append(
+            "パスワードが [YOUR-PASSWORD] のままです。実際のパスワードに\n"
+            "置き換えてください（角括弧も削除）。"
+        )
+    return "\n".join(lines)
 
 
 def load_pipeline_output(path: Path):
