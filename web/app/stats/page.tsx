@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getStats } from "@/lib/stats";
 import { ProbBars } from "@/components/Bars";
 import { LaneBadge } from "@/components/LaneBadge";
+import { ErrorCard } from "@/components/ErrorCard";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "実績集計｜ボートレース データビュー" };
@@ -17,7 +18,22 @@ function se(p: number, n: number) {
 }
 
 export default async function StatsPage() {
-  const stats = await getStats();
+  let stats = null;
+  let failure: unknown = null;
+  try {
+    stats = await getStats();
+  } catch (e) {
+    failure = e;
+  }
+
+  if (failure) {
+    return (
+      <main className="wrap">
+        <h1>実績集計</h1>
+        <ErrorCard where="過去レースの集計" error={failure} />
+      </main>
+    );
+  }
 
   if (!stats) {
     return (

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getDay, listDates } from "@/lib/data";
 import { LaneBadge } from "@/components/LaneBadge";
 import { DateNav } from "@/components/DateNav";
+import { ErrorCard } from "@/components/ErrorCard";
 import type { Race } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -23,9 +24,27 @@ export default async function Home({
   searchParams: Promise<{ date?: string }>;
 }) {
   const { date: requested } = await searchParams;
-  const dates = await listDates();
-  const date = requested && dates.includes(requested) ? requested : dates[0];
-  const day = date ? await getDay(date) : null;
+
+  // データ層の不調でページ全体を500にせず、画面に原因を出す。
+  let dates: string[] = [];
+  let day = null;
+  let failure: unknown = null;
+  try {
+    dates = await listDates();
+    const date = requested && dates.includes(requested) ? requested : dates[0];
+    day = date ? await getDay(date) : null;
+  } catch (e) {
+    failure = e;
+  }
+
+  if (failure) {
+    return (
+      <main className="wrap">
+        <h1>ボートレース データビュー</h1>
+        <ErrorCard where="レース一覧" error={failure} />
+      </main>
+    );
+  }
 
   if (!day) {
     return (

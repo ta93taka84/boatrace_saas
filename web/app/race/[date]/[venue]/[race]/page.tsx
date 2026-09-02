@@ -4,6 +4,7 @@ import { getRace } from "@/lib/data";
 import { LaneBadge } from "@/components/LaneBadge";
 import { ProbBars, DivergingBars } from "@/components/Bars";
 import { DotPlot } from "@/components/DotPlot";
+import { ErrorCard } from "@/components/ErrorCard";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,23 @@ export default async function RacePage({
   params: Promise<{ date: string; venue: string; race: string }>;
 }) {
   const { date, venue: venueCode, race: raceNo } = await params;
-  const found = await getRace(date, venueCode, Number(raceNo));
+
+  let found = null;
+  let failure: unknown = null;
+  try {
+    found = await getRace(date, venueCode, Number(raceNo));
+  } catch (e) {
+    failure = e;
+  }
+
+  if (failure) {
+    return (
+      <main className="wrap">
+        <h1>レース詳細</h1>
+        <ErrorCard where="レースデータ" error={failure} />
+      </main>
+    );
+  }
   if (!found) notFound();
 
   const { venue, race } = found;
