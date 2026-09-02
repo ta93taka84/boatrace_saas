@@ -49,13 +49,6 @@ function assertProjectUrl(value: string): void {
     );
   }
 
-  if (parsed.pathname !== "/" && parsed.pathname !== "") {
-    throw new Error(
-      `NEXT_PUBLIC_SUPABASE_URL に余分なパスが含まれています: ${parsed.pathname}\n` +
-        "https://<プロジェクトID>.supabase.co までにしてください（/rest/v1 などは不要）。"
-    );
-  }
-
   if (!parsed.hostname.endsWith(".supabase.co")) {
     throw new Error(
       `NEXT_PUBLIC_SUPABASE_URL のホスト名が想定と異なります: ${parsed.hostname}\n` +
@@ -64,11 +57,23 @@ function assertProjectUrl(value: string): void {
   }
 }
 
+/**
+ * 設定値からプロジェクトのオリジンだけを取り出す。
+ *
+ * Supabaseの画面には /rest/v1 付きのエンドポイントも併記されており、
+ * そちらを設定してしまうことがある。ライブラリが /rest/v1 を自前で
+ * 付けるため二重になり、"Invalid path specified in request URL" で
+ * 全ページが落ちる。意図は明らかなので、エラーにせず補正する。
+ */
+function toOrigin(value: string): string {
+  return new URL(value).origin;
+}
+
 export function getSupabase(): SupabaseClient | null {
   if (!url || !anonKey) return null;
   if (!client) {
     assertProjectUrl(url);
-    client = createClient(url, anonKey, {
+    client = createClient(toOrigin(url), anonKey, {
       auth: { persistSession: false },
     });
   }
