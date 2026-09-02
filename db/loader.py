@@ -39,7 +39,19 @@ def _describe_dsn(dsn: str) -> str:
     host, port = parsed.hostname or "?", parsed.port or "?"
     lines = [f"接続先: {host}:{port} (user={parsed.username or '?'})"]
 
-    if "pooler" not in host:
+    # ホスト名にドットが無いのは、まともなFQDNではないということ。
+    # パスワードに @ などのURL区切り文字が入っていると、そこが
+    # ホスト名の開始と誤解釈され、断片が host として取り出される。
+    if "." not in host:
+        lines.append(
+            f"ホスト名 '{host}' は不正です。パスワードに @ # ? / : などの記号が\n"
+            "含まれていると、接続文字列の解析が壊れてこの状態になります。\n"
+            "対処: Supabaseでデータベースパスワードを英数字のみに変更するのが\n"
+            "確実です（Project Settings > Database > Reset database password）。\n"
+            "パスワードを変えたくない場合は記号をパーセントエンコードしてください\n"
+            "（@ は %40、# は %23、? は %3F、/ は %2F、: は %3A）。"
+        )
+    elif "pooler" not in host:
         lines.append(
             "ホスト名に 'pooler' が含まれていません。Supabaseの Direct connection は\n"
             "IPv6専用で、GitHub ActionsのランナーはIPv4のみのため接続できません。\n"
