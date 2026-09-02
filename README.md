@@ -174,10 +174,12 @@ GitHub Actionsに設定するシークレット:
    gh secret set DATABASE_URL
    ```
 
-3. **Vercelにインポートする。** リポジトリを取り込み、環境変数に
-   `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` を設定する
-   （Project Settings > API の値。`web/.env.example` 参照）。
-   ビルド設定は `vercel.json` にある。
+3. **Vercelにインポートする。** このとき **Root Directory に `web` を指定する**。
+   リポジトリ直下には requirements.txt と .py があるため、既定のままだと
+   VercelがPythonプロジェクトと誤検出してNext.jsとしてビルドされない。
+
+   環境変数に `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   を設定する（Supabaseの Project Settings > API の値。`web/.env.example` 参照）。
 4. **ドメインを繋ぐ。** Vercelのドメイン設定で boat-win.jp を追加し、
    表示されるDNSレコードをレジストラ側に登録する。
 
