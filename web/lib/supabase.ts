@@ -20,9 +20,54 @@ const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 
 let client: SupabaseClient | null = null;
 
+/**
+ * URLの形を検証する。
+ *
+ * 正しいのは https://<プロジェクトID>.supabase.co の形だけ。
+ * ダッシュボードのアドレスバーの値を貼ると
+ * https://supabase.com/dashboard/project/<ID> になり、Supabaseは
+ * "Invalid path specified in request URL" という原因の分かりにくい
+ * エラーを返す。設定ミスをここで名指しする。
+ */
+function assertProjectUrl(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(
+      `NEXT_PUBLIC_SUPABASE_URL がURLとして不正です: ${value}\n` +
+        "https://<プロジェクトID>.supabase.co の形で設定してください。"
+    );
+  }
+
+  if (parsed.hostname === "supabase.com" || parsed.hostname === "www.supabase.com") {
+    throw new Error(
+      "NEXT_PUBLIC_SUPABASE_URL にダッシュボードのURLが設定されています。\n" +
+        "ブラウザのアドレスバーの値ではなく、Supabaseの " +
+        "Project Settings > API にある Project URL " +
+        "(https://<プロジェクトID>.supabase.co) を設定してください。"
+    );
+  }
+
+  if (parsed.pathname !== "/" && parsed.pathname !== "") {
+    throw new Error(
+      `NEXT_PUBLIC_SUPABASE_URL に余分なパスが含まれています: ${parsed.pathname}\n` +
+        "https://<プロジェクトID>.supabase.co までにしてください（/rest/v1 などは不要）。"
+    );
+  }
+
+  if (!parsed.hostname.endsWith(".supabase.co")) {
+    throw new Error(
+      `NEXT_PUBLIC_SUPABASE_URL のホスト名が想定と異なります: ${parsed.hostname}\n` +
+        "通常は <プロジェクトID>.supabase.co です。"
+    );
+  }
+}
+
 export function getSupabase(): SupabaseClient | null {
   if (!url || !anonKey) return null;
   if (!client) {
+    assertProjectUrl(url);
     client = createClient(url, anonKey, {
       auth: { persistSession: false },
     });
