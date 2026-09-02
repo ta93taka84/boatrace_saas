@@ -11,8 +11,12 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  * 読み取りだけが許可されている。書き込みは収集ジョブが service_role で行う。
  */
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+// 環境変数の貼り付けでは、末尾のスラッシュや前後の空白・改行が
+// 混入しやすい。末尾スラッシュが付いていると要求パスが
+// "//rest/v1/..." となり "Invalid path specified in request URL" で
+// 全ページが落ちる。設定ミスに強くするため、ここで正規化する。
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, "");
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 
 let client: SupabaseClient | null = null;
 
