@@ -58,15 +58,23 @@ def course_rates(venue_code: str | None = None) -> dict[int, float]:
 
 # 各補正の効き具合。
 #
-# W_CLASS は144レースの検証で LogLoss を 1.323 -> 1.266 に改善した。
-# 誤差水準(約0.02)を大きく超えるため「級別が効く」ことは確かだが、
-# 重み2.0のほうが数値上はわずかに良かったものの、その差は誤差の範囲。
-# データに合わせて選ぶと過剰適合になるので控えめな1.0を採る。
-# 他の重みはバックテスト未実施の暫定値であり、要キャリブレーション。
+# 1236レースを日付で学習624/検証612に分割し、検証側で対応のある比較を
+# 行って決めた（py -3 experiment.py）。判定は差が標準誤差の2倍を
+# 超えるかどうか。
+#
+#   W_CLASS  級別の追加は -0.0450 ± 0.0092 で有意な改善。
+#            重み2.0との差は +0.0042 ± 0.0090 で誤差の範囲のため1.0を採る。
+#   W_VENUE  当地勝率の追加は -0.0096 ± 0.0036 で有意な改善。
+#   W_ST     外すと +0.0083 ± 0.0020 悪化するので維持。
+#   W_MOTOR  外しても +0.0047 ± 0.0041 で誤差の範囲。寄与は証明できていないが、
+#            悪化もしないため据え置く。判断には更にデータが要る。
+#
+# この構成でも市場オッズには -0.1315 ± 0.0166 で明確に負けている。
 W_RACER = 1.0   # 全国勝率
 W_MOTOR = 0.5   # モーター2連対率
 W_ST = 0.5      # 平均スタートタイミング
 W_CLASS = 1.0   # 級別（A1/A2/B1/B2）
+W_VENUE = 0.5   # 当地勝率
 
 # 級別を数値化した相対強度。等級の実力差の目安。
 CLASS_STRENGTH = {"A1": 1.0, "A2": 0.72, "B1": 0.5, "B2": 0.35}
@@ -116,6 +124,7 @@ def estimate_win_prob(racers: list[dict], venue_code: str | None = None) -> dict
     mean_motor = _mean([r.get("motor_in2_rate", 0) for r in racers])
     mean_st = _mean([r.get("avg_st", 0) for r in racers])
     mean_class = _mean([CLASS_STRENGTH.get(r.get("class"), 0.5) for r in racers])
+    mean_venue = _mean([r.get("win_rate_venue", 0) for r in racers])
 
     base_rates = course_rates(venue_code)
     raw = {}
@@ -127,6 +136,8 @@ def estimate_win_prob(racers: list[dict], venue_code: str | None = None) -> dict
         # STは小さいほど良いので比を反転
         score *= _ratio(mean_st, r.get("avg_st", 0)) ** W_ST
         score *= _ratio(CLASS_STRENGTH.get(r.get("class"), 0.5), mean_class) ** W_CLASS
+        # 当地勝率は初出走の選手などで0になる。_ratio が補正なしに落とす。
+        score *= _ratio(r.get("win_rate_venue", 0), mean_venue) ** W_VENUE
         raw[r["lane"]] = score
 
     total = sum(raw.values())

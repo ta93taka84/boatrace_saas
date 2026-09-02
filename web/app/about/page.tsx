@@ -60,7 +60,8 @@ export default function About() {
           期待値の推奨は画面に出していません。
         </p>
         <p>
-          144レースでの検証結果です。LogLossとBrierはどちらも小さいほど良い指標です。
+          1236レース（2026年8月25日〜9月1日）での検証結果です。
+          LogLossとBrierはどちらも小さいほど良い指標です。
         </p>
         <div className="scroll-x">
           <table>
@@ -75,21 +76,21 @@ export default function About() {
             <tbody>
               <tr>
                 <td className="l">市場オッズ</td>
-                <td className="num">1.137</td>
-                <td className="num">0.566</td>
-                <td className="num">59.7%</td>
+                <td className="num">1.160</td>
+                <td className="num">0.574</td>
+                <td className="num">57.3%</td>
               </tr>
               <tr>
                 <td className="l">当モデル</td>
-                <td className="num">1.266</td>
-                <td className="num">0.614</td>
-                <td className="num">53.5%</td>
+                <td className="num">1.265</td>
+                <td className="num">0.615</td>
+                <td className="num">55.5%</td>
               </tr>
               <tr>
                 <td className="l muted">コース基準のみ</td>
-                <td className="num muted">1.439</td>
-                <td className="num muted">0.696</td>
-                <td className="num muted">49.3%</td>
+                <td className="num muted">1.407</td>
+                <td className="num muted">0.669</td>
+                <td className="num muted">53.0%</td>
               </tr>
             </tbody>
           </table>
