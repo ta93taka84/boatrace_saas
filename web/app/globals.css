@@ -1,0 +1,177 @@
+/*
+ * 配色トークン。
+ *
+ * チャートの系列色には検証済みの配色を使い、艇色（1白2黒3赤4青5黄6緑）は
+ * 艇番バッジの識別チップに限定する。艇色は白と黒を含むため彩度・明度の
+ * 基準を構造的に満たせず、満たすよう調整すると「白」「黒」という
+ * 競技上の識別が壊れるため、チャートの符号化には使わない。
+ * バッジには常に艇番の数字が入るので、色だけで識別させることはない。
+ */
+
+:root {
+  color-scheme: light;
+
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+
+  /* 単一系列の大小比較に使う逐次色相（青） */
+  --seq-strong: #2a78d6;
+  --seq-mid: #6da7ec;
+  --seq-weak: #cde2fb;
+
+  /* 正負の極性に使う発散色（青←→赤、中立はグレー） */
+  --div-pos: #2a78d6;
+  --div-neg: #d03b3b;
+  --div-mid: #f0efec;
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+
+  /* 艇色（バッジ専用） */
+  --lane-1-bg: #ffffff;  --lane-1-fg: #0b0b0b;  --lane-1-br: #c3c2b7;
+  --lane-2-bg: #111111;  --lane-2-fg: #ffffff;  --lane-2-br: #111111;
+  --lane-3-bg: #e02020;  --lane-3-fg: #ffffff;  --lane-3-br: #e02020;
+  --lane-4-bg: #1560d0;  --lane-4-fg: #ffffff;  --lane-4-br: #1560d0;
+  --lane-5-bg: #f5c518;  --lane-5-fg: #0b0b0b;  --lane-5-br: #d9ac12;
+  --lane-6-bg: #149d4e;  --lane-6-fg: #ffffff;  --lane-6-br: #149d4e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+
+    --seq-strong: #3987e5;
+    --seq-mid: #5598e7;
+    --seq-weak: #184f95;
+
+    --div-pos: #3987e5;
+    --div-neg: #d03b3b;
+    --div-mid: #383835;
+
+    --lane-1-bg: #e8e8e4;  --lane-1-fg: #0b0b0b;  --lane-1-br: #e8e8e4;
+    --lane-2-bg: #111111;  --lane-2-fg: #ffffff;  --lane-2-br: #55534d;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+
+  --seq-strong: #3987e5;
+  --seq-mid: #5598e7;
+  --seq-weak: #184f95;
+
+  --div-pos: #3987e5;
+  --div-neg: #d03b3b;
+  --div-mid: #383835;
+
+  --lane-1-bg: #e8e8e4;  --lane-1-fg: #0b0b0b;  --lane-1-br: #e8e8e4;
+  --lane-2-bg: #111111;  --lane-2-fg: #ffffff;  --lane-2-br: #55534d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font: 14px/1.6 "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--grid);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: .01em; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+h3 { font-size: 13px; margin: 0 0 8px; color: var(--text-secondary); font-weight: 600; }
+
+.sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 20px; }
+.muted { color: var(--text-muted); }
+
+.notice {
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  padding: 10px 14px;
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  margin-bottom: 20px;
+  color: var(--text-secondary);
+}
+
+/* 横スクロールはこのコンテナの中だけで起こす。body は横に流さない。 */
+.scroll-x { overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 7px 8px; text-align: right; white-space: nowrap; }
+th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  border-bottom: 1px solid var(--axis);
+}
+td { border-bottom: 1px solid var(--grid); }
+th.l, td.l { text-align: left; }
+tbody tr:last-child td { border-bottom: none; }
+
+.num { font-variant-numeric: tabular-nums; }
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.venue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.race-links { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.race-links a {
+  display: inline-block;
+  min-width: 34px;
+  text-align: center;
+  padding: 4px 6px;
+  border: 1px solid var(--grid);
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.race-links a:hover { border-color: var(--seq-strong); color: var(--seq-strong); }

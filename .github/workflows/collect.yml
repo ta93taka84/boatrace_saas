@@ -1,0 +1,101 @@
+name: collect
+
+# 収集を3つのジョブに分けて実行時間を抑える。
+# フルpipelineを毎時回すと月10,000分を超え、無料枠(private 2,000分/月)を
+# 使い切るため、直前情報とオッズは締切が近いレースだけに絞る。
+#
+# GitHub Actionsのcronは UTC。JST = UTC+9。
+# なお cron は混雑時に5〜15分遅延することがあるため、prerace は
+# 締切40分前という広めの窓を取って取りこぼしを防いでいる。
+#
+# 注意: スケジュール実行はリポジトリが60日間無活動になると自動で停止する。
+#       停止したらGitHubのUIから手動で再有効化が必要。
+
+on:
+  schedule:
+    - cron: '0 0 * * *'        # 09:00 JST 出走表
+    - cron: '*/30 1-12 * * *'  # 10:00-21:30 JST 直前情報とオッズ
+    - cron: '0 13 * * *'       # 22:00 JST 確定結果
+  workflow_dispatch:
+    inputs:
+      job:
+        description: '手動実行するジョブ'
+        required: true
+        default: prerace
+        type: choice
+        options: [morning, prerace, results]
+
+concurrency:
+  group: collect
+  cancel-in-progress: false   # 取得途中で止めると欠損が出るので待たせる
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Tokyo
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # step単位のenvはそのstepのif条件からは参照できないため、
+      # 通知の有無を判定できるようjobレベルに置く。
+      WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: どのジョブを走らせるか決める
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}" in
+              '0 0 * * *')       echo "job=morning" >> "$GITHUB_OUTPUT" ;;
+              '0 13 * * *')      echo "job=results" >> "$GITHUB_OUTPUT" ;;
+              *)                 echo "job=prerace" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
+
+      # パーサーが壊れた状態で走らせると、欠損データが混ざって
+      # 後から切り分けるのが面倒になる。取得の前に止める。
+      - name: パーサーの回帰テスト
+        run: python -m unittest discover -s tests
+
+      - name: 収集
+        run: python jobs.py ${{ steps.pick.outputs.job }}
+
+      - name: Supabaseへ取り込み
+        if: env.DATABASE_URL != ''
+        run: python -m db.loader "output/$(date +%Y%m%d).json"
+
+      # 取得結果はリポジトリにコミットしない。公式サイトのデータを
+      # 再配布しないため、また毎日数百KBずつ履歴が膨らむのを避けるため。
+      # データの保存先はSupabase。DBを設定するまでは、下のアーティファクトで
+      # 何が取れたかを確認する。
+      - name: 取得結果をアーティファクトとして残す
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: output-${{ steps.pick.outputs.job }}-${{ github.run_id }}
+          path: output/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # 失敗時だけ通知する。何も起きていないときに通知が来ないことが
+      # 「1日5分で回す」運用の前提。
+      #
+      # 注意: 当初予定していた LINE Notify は2025年3月31日に終了済み。
+      #       Discord/Slackのincoming webhook URLを WEBHOOK_URL に入れる。
+      - name: 失敗を通知
+        if: failure() && env.WEBHOOK_URL != ''
+        run: |
+          curl -sS -X POST "$WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -d "{\"content\":\"[boatrace] ${{ steps.pick.outputs.job }} が失敗しました: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"

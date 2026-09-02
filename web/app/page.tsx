@@ -1,0 +1,132 @@
+import Link from "next/link";
+import { getDay, listDates } from "@/lib/data";
+import { LaneBadge } from "@/components/LaneBadge";
+import { DateNav } from "@/components/DateNav";
+import type { Race } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
+
+/** 市場が最も高く評価している艇と、その確率。 */
+function marketTop(race: Race): { lane: number; prob: number } | null {
+  if (!race.market_prob) return null;
+  const entries = Object.entries(race.market_prob).map(([l, p]) => ({
+    lane: Number(l),
+    prob: p,
+  }));
+  if (entries.length === 0) return null;
+  return entries.reduce((a, b) => (b.prob > a.prob ? b : a));
+}
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>;
+}) {
+  const { date: requested } = await searchParams;
+  const dates = await listDates();
+  const date = requested && dates.includes(requested) ? requested : dates[0];
+  const day = date ? await getDay(date) : null;
+
+  if (!day) {
+    return (
+      <main className="wrap">
+        <h1>ボートレース データビュー</h1>
+        <p className="sub">まだデータがありません。</p>
+        <div className="card">
+          <p style={{ marginTop: 0 }}>収集ジョブを実行するとここに表示されます。</p>
+          <pre
+            className="scroll-x"
+            style={{
+              background: "var(--page)",
+              padding: 12,
+              borderRadius: 6,
+              fontSize: 12,
+              margin: 0,
+            }}
+          >
+{`py -3 jobs.py morning
+py -3 jobs.py prerace --window 40`}
+          </pre>
+        </div>
+      </main>
+    );
+  }
+
+  const shown = `${day.date.slice(0, 4)}-${day.date.slice(4, 6)}-${day.date.slice(6, 8)}`;
+  const totalRaces = day.venues.reduce((n, v) => n + v.races.length, 0);
+  const withOdds = day.venues.reduce(
+    (n, v) => n + v.races.filter((r) => r.market_prob).length,
+    0
+  );
+
+  return (
+    <main className="wrap">
+      <h1>ボートレース データビュー</h1>
+      <p className="sub">
+        {shown} ・ {day.venues.length}場 {totalRaces}レース
+        <span className="muted"> ・ オッズ取得済み {withOdds}</span>
+        {day.updated_at && (
+          <span className="muted"> ・ 更新 {day.updated_at.slice(11, 16)}</span>
+        )}
+        {" ・ "}
+        <Link href="/about">データについて</Link>
+        {" ・ "}
+        <Link href="/stats">実績集計</Link>
+      </p>
+
+      <DateNav dates={dates} current={day.date} />
+
+      <div className="notice">
+        「市場勝率」は三連単オッズから逆算した値です。予測モデルは現時点で
+        市場オッズを上回っておらず、期待値は表示していません。
+        詳しくは<Link href="/about">データについて</Link>。
+      </div>
+
+      <div className="venue-grid">
+        {day.venues.map((venue) => (
+          <div className="card" key={venue.code} style={{ marginBottom: 0 }}>
+            <h2 style={{ marginBottom: 2 }}>{venue.name}</h2>
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              {venue.races.length}レース
+              {venue.races.some((r) => r.result) && " ・ 結果確定"}
+            </p>
+            <div className="race-links">
+              {venue.races.map((race) => {
+                const top = marketTop(race);
+                const winner = race.result?.winner_lane ?? null;
+                return (
+                  <Link
+                    key={race.race_no}
+                    href={`/race/${day.date}/${venue.code}/${race.race_no}`}
+                    title={
+                      winner
+                        ? `${race.race_no}R 確定1着 ${winner}号艇`
+                        : top
+                        ? `${race.race_no}R 市場本命 ${top.lane}号艇 ${(top.prob * 100).toFixed(0)}%`
+                        : `${race.race_no}R`
+                    }
+                    // 確定した1着と、まだ確定していない市場本命は
+                    // 同じバッジで出ると区別がつかないため枠線で分ける。
+                    style={winner ? { borderColor: "var(--good)" } : undefined}
+                  >
+                    <span
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                    >
+                      {race.race_no}R
+                      {/* 結果が出ていれば1着艇、まだなら市場本命を出す */}
+                      {winner ? (
+                        <LaneBadge lane={winner} size={14} />
+                      ) : top ? (
+                        <LaneBadge lane={top.lane} size={14} />
+                      ) : null}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </main>
+  );
+}
