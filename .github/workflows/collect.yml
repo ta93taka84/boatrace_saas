@@ -1,8 +1,14 @@
 name: collect
 
 # 収集を3つのジョブに分けて実行時間を抑える。
-# フルpipelineを毎時回すと月10,000分を超え、無料枠(private 2,000分/月)を
-# 使い切るため、直前情報とオッズは締切が近いレースだけに絞る。
+# 直前情報とオッズは締切が近いレースだけに絞っている。
+#
+# リポジトリをPublicにしているため実行時間の課金は無いが、
+# 絞り込みは維持する。公式サイトへの負荷を無闇に増やさないため。
+#
+# 実測: GitHubのランナー(US)からboatrace.jpまでは1リクエスト約12秒かかる。
+# うち2秒が自前のレート制限で、残りはレイテンシ。日本から実行した場合の
+# 約5倍なので、所要時間を見積もるときはこの差を忘れないこと。
 #
 # GitHub Actionsのcronは UTC。JST = UTC+9。
 # なお cron は混雑時に5〜15分遅延することがあるため、prerace は
@@ -32,7 +38,10 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # morning は169リクエスト、results は156リクエスト。
+    # ランナーからは1リクエスト約12秒かかるため、どちらも30分では
+    # 足りず打ち切られる。実測34分・31分に余裕を持たせて60分にする。
+    timeout-minutes: 60
     env:
       TZ: Asia/Tokyo
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
