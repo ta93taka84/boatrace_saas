@@ -162,6 +162,41 @@ GitHub Actionsに設定するシークレット:
 - `DATABASE_URL` — Supabaseの接続文字列。未設定ならDB取り込みはスキップされる
 - `WEBHOOK_URL` — 失敗通知先。Discord/Slackのincoming webhook
 
+## デプロイ
+
+公開先は boat-win.jp（Vercel）。手順は次のとおり。
+
+1. **Supabaseプロジェクトを作る。** SQL Editorで `db/schema.sql` を実行する。
+2. **収集ジョブにDBを教える。** Project Settings > Database の接続文字列を
+   GitHubのシークレット `DATABASE_URL` に入れる。
+
+   ```
+   gh secret set DATABASE_URL
+   ```
+
+3. **Vercelにインポートする。** リポジトリを取り込み、環境変数に
+   `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` を設定する
+   （Project Settings > API の値。`web/.env.example` 参照）。
+   ビルド設定は `vercel.json` にある。
+4. **ドメインを繋ぐ。** Vercelのドメイン設定で boat-win.jp を追加し、
+   表示されるDNSレコードをレジストラ側に登録する。
+
+**Vercelでは環境変数の設定が必須。** 未設定だとローカルJSONを読もうとするが、
+Vercel上に `output/` は存在しないため、画面には何も表示されない。
+
+`service_role` キーをフロントに置かないこと。ブラウザに露出し、
+RLSを迂回して誰でも書き込める状態になる。フロントは anon キーだけを使う。
+
+### 表現に関する注意
+
+有料サービスで的中率や収益性を訴求すると、景品表示法の優良誤認に
+あたるおそれがある。実際に予想サイトへの措置命令が出ている領域なので、
+**訴求軸は「勝てる」ではなく「データが見やすい」に置くこと。**
+モデルが市場オッズを上回っていない現状では、なおさら期待値を
+売り文句にしてはならない。
+
+有料化する場合は特定商取引法に基づく表記も必要になる。
+
 ## 注意点
 
 - **LINE Notifyは2025年3月31日に終了済み。** 通知は汎用Webhookを使う。

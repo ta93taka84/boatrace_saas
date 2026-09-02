@@ -12,3 +12,7 @@ output/
 
 web/node_modules/
 web/.next/
+
+# Vercel / Next.js のローカル環境変数
+web/.env*.local
+.vercel
