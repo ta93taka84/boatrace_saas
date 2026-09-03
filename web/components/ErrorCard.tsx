@@ -16,17 +16,7 @@ export function ErrorCard({ where, error }: { where: string; error: unknown }) {
       <p style={{ marginTop: 0 }}>
         {where}の読み込みに失敗しました。時間をおいて再度お試しください。
       </p>
-      <pre
-        className="scroll-x"
-        style={{
-          background: "var(--page)",
-          padding: 12,
-          borderRadius: 6,
-          fontSize: 12,
-          margin: 0,
-          color: "var(--text-secondary)",
-        }}
-      >
+      <pre className="scroll-x inset" style={{ color: "var(--text-secondary)" }}>
         {message}
       </pre>
     </div>

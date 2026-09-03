@@ -7,6 +7,10 @@ function label(date: string) {
 /**
  * 取得済みの日付を新しい順に並べる。データのある日だけを出すので、
  * 空の日付を開いてしまうことがない。
+ *
+ * 選択中の色にはチャートの系列色ではなくUIのアクセント（--accent）を使う。
+ * 逐次色と同じ色で塗ると、選択されたタブが「値の大きい棒」に見えて
+ * 操作とデータの区別がつかなくなるため。
  */
 export function DateNav({ dates, current }: { dates: string[]; current: string }) {
   if (dates.length <= 1) return null;
@@ -29,9 +33,9 @@ export function DateNav({ dates, current }: { dates: string[]; current: string }
               borderRadius: 6,
               fontSize: 12,
               textDecoration: "none",
-              border: `1px solid ${active ? "var(--seq-strong)" : "var(--grid)"}`,
-              background: active ? "var(--seq-strong)" : "transparent",
-              color: active ? "#fff" : "var(--text-secondary)",
+              border: `1px solid ${active ? "var(--accent)" : "var(--grid)"}`,
+              background: active ? "var(--accent)" : "transparent",
+              color: active ? "var(--accent-ink)" : "var(--text-secondary)",
             }}
           >
             {label(d)}

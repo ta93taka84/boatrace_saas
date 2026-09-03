@@ -53,16 +53,7 @@ export default async function Home({
         <p className="sub">まだデータがありません。</p>
         <div className="card">
           <p style={{ marginTop: 0 }}>収集ジョブを実行するとここに表示されます。</p>
-          <pre
-            className="scroll-x"
-            style={{
-              background: "var(--page)",
-              padding: 12,
-              borderRadius: 6,
-              fontSize: 12,
-              margin: 0,
-            }}
-          >
+          <pre className="scroll-x inset">
 {`py -3 jobs.py morning
 py -3 jobs.py prerace --window 40`}
           </pre>
