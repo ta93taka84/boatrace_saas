@@ -190,7 +190,8 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
             slot["overround"] = odds["overround"]
             slot["odds"] = odds["odds"]
 
-        scores = score_race(slot.get("racers", []), market_prob, venue["code"])
+        scores = score_race(slot.get("racers", []), market_prob, venue["code"],
+                            slot.get("conditions"))
         if scores:
             slot.update(scores)
 

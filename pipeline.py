@@ -87,7 +87,8 @@ def run(date_str: str, fetch_before: bool = False):
                 print("オッズ- ", end="", flush=True)
 
             # 予測勝率・期待値
-            scores = score_race(race_data.get("racers", []), market_prob, code)
+            scores = score_race(race_data.get("racers", []), market_prob, code,
+                                race_data.get("conditions"))
             if scores:
                 race_data.update(scores)
                 if "top_ev" in scores:

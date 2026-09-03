@@ -152,6 +152,254 @@ def split_by_date(rows):
     return train, test
 
 
+
+# ---------------------------------------------------------------- 条件付きロジット
+#
+# 現行モデルは「コース基準 × 平均比の累乗」を手で決めた重みで掛け合わせている。
+# 形もパラメータも人が決めており、データから当てはめていない。市場オッズに
+# 明確に負けている原因が「形が悪い」のか「特徴量が足りない」のかを切り分ける。
+#
+# 6艇のうち1着が1つ選ばれる構造なので、条件付きロジット（レース内ソフトマックス）が
+# 素直な当てはめになる。
+#
+#   P(i が1着) = exp(offset_i + x_i・β) / Σ_j exp(offset_j + x_j・β)
+#
+# offset にはコース別1着率の対数を置く。コース効果はデータから学ばせず既定値に
+# 固定する。以前、コース別1着率を実測で置き換えても改善しなかった（差が
+# 標準誤差の範囲だった）ので、ここを自由にするとノイズを拾うだけになる。
+#
+# 特徴量はレース内で中心化する。レース間の絶対水準ではなく、同じレースに
+# 出ている6人の中での相対差だけが勝敗を決めるため。
+#
+# 依存を増やさないよう numpy は使わず、9次元のニュートン法を自前で解く。
+# 勾配降下だと収束に数千反復かかるが、ヘッセ行列が9×9と小さいので
+# ニュートン法なら10回程度で止まる。
+
+FEATURES_CURRENT = ["win_rate_all", "class", "win_rate_venue", "st", "motor_in2_rate"]
+FEATURES_ALL = FEATURES_CURRENT + [
+    "boat_in2_rate", "weight", "f_count", "in2_rate_all",
+]
+# 当日の情報。出走表からは分からない、その日の艇と水面の状態。
+FEATURES_TODAY = FEATURES_CURRENT + ["exhibit"]
+FEATURES_TODAY_FULL = FEATURES_ALL + ["exhibit", "tilt", "wind_inner", "wave_inner"]
+
+# 0が「欠損」ではなく正当な値である特徴量。
+# F回数0は「フライング歴が無い」という情報であって、欠測ではない。
+# ここを取り違えると、きれいな選手が全員「平均並み」に潰れて信号が消える。
+# 風と波の交互作用も、内枠以外は定義上0になる。
+ZERO_IS_VALID = {"tilt", "f_count", "l_count", "wind_inner", "wave_inner"}
+
+
+def _raw_feature(r, name, row):
+    """1艇ぶんの特徴量。大きいほど有利になる向きに符号を揃える。"""
+    if name == "class":
+        return CLASS_STRENGTH.get(r.get("class"), 0.5)
+    if name == "st":
+        # STは小さいほど良いので符号を反転する
+        return -(r.get("avg_st") or 0.0)
+    if name == "exhibit":
+        # 展示タイムも小さいほど速い
+        return -(r.get("exhibit_time") or 0.0)
+    if name in ("wind_inner", "wave_inner"):
+        # 風と波は1レースで共通の値なので、そのままではソフトマックスで
+        # 打ち消し合って何も効かない。効くとすれば「荒れると内枠の
+        # 優位が削られる」という形なので、1号艇との交互作用として入れる。
+        if r["lane"] != 1:
+            return 0.0
+        cond = row.get("conditions") or {}
+        key = "wind_speed" if name == "wind_inner" else "wave_height"
+        return cond.get(key) or 0.0
+    return r.get(name) or 0.0
+
+
+def _race_matrix(row, names):
+    """
+    レース1本ぶんの (艇番リスト, 中心化済み特徴量行列, オフセット) を返す。
+
+    欠損値は0で入るが、その艇だけ極端な値にならないよう、中心化の平均は
+    有効な値だけから取り、欠損艇は平均に置き換えてから引く（＝寄与0）。
+    """
+    racers = row["racers"]
+    if not racers:
+        return [], [], []
+    lanes = [r["lane"] for r in racers]
+    cols = []
+    for name in names:
+        vals = [_raw_feature(r, name, row) for r in racers]
+        if name in ZERO_IS_VALID:
+            m = sum(vals) / len(vals)
+            cols.append([v - m for v in vals])
+        else:
+            valid = [v for v in vals if v]
+            m = sum(valid) / len(valid) if valid else 0.0
+            cols.append([(v if v else m) - m for v in vals])
+    rows_ = [[cols[j][i] for j in range(len(names))] for i in range(len(racers))]
+    offset = [math.log(max(COURSE_BASE.get(l, 0.05), 1e-6)) for l in lanes]
+    return lanes, rows_, offset
+
+
+def _scales(rows, names):
+    """各特徴量の標準偏差。桁が違うままだとニュートン法の条件数が悪化する。"""
+    acc = [[] for _ in names]
+    for row in rows:
+        _, x, _ = _race_matrix(row, names)
+        for r in x:
+            for j, v in enumerate(r):
+                acc[j].append(v)
+    out = []
+    for col in acc:
+        if not col:
+            out.append(1.0)
+            continue
+        m = sum(col) / len(col)
+        var = sum((v - m) ** 2 for v in col) / max(len(col) - 1, 1)
+        out.append(math.sqrt(var) or 1.0)
+    return out
+
+
+def _solve(a, b):
+    """部分ピボット付きガウス消去。次元が小さいので素直な実装で足りる。"""
+    n = len(b)
+    m = [row[:] + [b[i]] for i, row in enumerate(a)]
+    for c in range(n):
+        piv = max(range(c, n), key=lambda r: abs(m[r][c]))
+        if abs(m[piv][c]) < 1e-12:
+            return None
+        m[c], m[piv] = m[piv], m[c]
+        for r in range(n):
+            if r == c:
+                continue
+            f = m[r][c] / m[c][c]
+            for k in range(c, n + 1):
+                m[r][k] -= f * m[c][k]
+    return [m[i][n] / m[i][i] for i in range(n)]
+
+
+def fit_logit(rows, names, l2=1.0, iters=25):
+    """
+    条件付きロジットを最尤で当てはめる。L2で軽く縮小する。
+
+    l2 は学習側だけで決める。検証側を見て選ぶと、検証が学習の一部になり
+    「学習に使っていないレースで比べる」という前提が崩れる。
+    """
+    scales = _scales(rows, names)
+    data = []
+    for row in rows:
+        lanes, x, off = _race_matrix(row, names)
+        if not lanes or row["winner_lane"] not in lanes:
+            continue
+        x = [[v / scales[j] for j, v in enumerate(r)] for r in x]
+        data.append((x, off, lanes.index(row["winner_lane"])))
+
+    k = len(names)
+
+    def loglik(b):
+        total = 0.0
+        for x, off, wi in data:
+            u = [off[i] + sum(x[i][j] * b[j] for j in range(k)) for i in range(len(x))]
+            mx = max(u)
+            total += u[wi] - mx - math.log(sum(math.exp(v - mx) for v in u))
+        return total - l2 * sum(v * v for v in b)
+
+    beta = [0.0] * k
+    cur = loglik(beta)
+    for _ in range(iters):
+        grad = [0.0] * k
+        hess = [[0.0] * k for _ in range(k)]
+        for x, off, wi in data:
+            u = [off[i] + sum(x[i][j] * beta[j] for j in range(k)) for i in range(len(x))]
+            mx = max(u)
+            e = [math.exp(v - mx) for v in u]
+            tot = sum(e)
+            p = [v / tot for v in e]
+            xbar = [sum(p[i] * x[i][j] for i in range(len(x))) for j in range(k)]
+            for j in range(k):
+                grad[j] += x[wi][j] - xbar[j]
+            for a in range(k):
+                for b in range(k):
+                    ex = sum(p[i] * x[i][a] * x[i][b] for i in range(len(x)))
+                    hess[a][b] -= ex - xbar[a] * xbar[b]
+        for j in range(k):
+            grad[j] -= 2 * l2 * beta[j]
+            hess[j][j] -= 2 * l2
+        # 最大化のニュートン法は beta - H^-1 g。Hは負定値なので
+        # この向きが上りになる。符号を取り違えると発散する。
+        step = _solve(hess, grad)
+        if step is None:
+            break
+
+        # 直線探索。ニュートン法は初期値が悪いと1歩で飛びすぎるので、
+        # 対数尤度が実際に上がるまで歩幅を半分にする。
+        t = 1.0
+        for _ in range(30):
+            cand = [beta[j] - t * step[j] for j in range(k)]
+            if loglik(cand) > cur:
+                break
+            t /= 2.0
+        else:
+            break
+
+        beta = cand
+        cur = loglik(beta)
+        if max(abs(t * v) for v in step) < 1e-8:
+            break
+
+    return {"names": names, "beta": beta, "scales": scales}
+
+
+def make_logit(model):
+    """当てはめ済みの係数から予測関数を作る。"""
+    names, beta, scales = model["names"], model["beta"], model["scales"]
+
+    def predict(row):
+        lanes, x, off = _race_matrix(row, names)
+        if not lanes:
+            return {}
+        u = []
+        for i in range(len(lanes)):
+            u.append(off[i] + sum(x[i][j] / scales[j] * beta[j] for j in range(len(names))))
+        mx = max(u)
+        e = [math.exp(v - mx) for v in u]
+        tot = sum(e)
+        return {lanes[i]: e[i] / tot for i in range(len(lanes))}
+
+    return predict
+
+
+def report_coefficients(model, label):
+    print(f"  {label} の係数（標準化後・符号は大きいほど有利に揃えてある）")
+    pairs = sorted(zip(model["names"], model["beta"]), key=lambda t: -abs(t[1]))
+    for name, b in pairs:
+        print(f"    {name:<16} {b:>+8.4f}")
+    print()
+
+
+def rolling_check(rows, names, ref_fn, label):
+    """
+    分割位置を変えて同じ比較を繰り返す。
+
+    候補を複数試して一番良いものを採ると、多重比較のぶん偶然通ることがある。
+    分割を変えても符号と大きさが安定していれば、たまたま拾った差ではないと言える。
+    学習と検証の境目は必ず日付で切り、検証側は学習より後の日だけにする。
+    """
+    dates = sorted({r["date"] for r in rows})
+    print(f"--- {label}: 分割位置を変えた再確認 ---")
+    print(f"  {'学習':>10} {'検証':>10} {'差':>9} {'±SE':>8} {'判定':>10}")
+    print("  " + "-" * 52)
+    for cut in range(3, len(dates)):
+        train = [r for r in rows if r["date"] < dates[cut]]
+        test = [r for r in rows if r["date"] >= dates[cut]]
+        if len(test) < 100:
+            continue
+        model = fit_logit(train, names)
+        diff, se, n = paired_diff(test, make_logit(model), ref_fn)
+        if se == 0:
+            continue
+        verdict = "改善" if diff < -2 * se else ("悪化" if diff > 2 * se else "誤差の範囲")
+        print(f"  {len(train):>10} {len(test):>10} {diff:>+9.4f} {se:>8.4f} {verdict:>10}")
+    print()
+
+
 def main():
     rows = load()
     if not rows:
@@ -160,6 +408,17 @@ def main():
 
     train, test = split_by_date(rows)
     print(f"全{len(rows)}レース (学習{len(train)} / 検証{len(test)})\n")
+
+    # 係数は学習側だけで当てはめる。検証側を1行も見ずに決めるのが要点。
+    fit_rows = train or rows
+    m_cur = fit_logit(fit_rows, FEATURES_CURRENT)
+    m_all = fit_logit(fit_rows, FEATURES_ALL)
+    m_today = fit_logit(fit_rows, FEATURES_TODAY)
+    m_full = fit_logit(fit_rows, FEATURES_TODAY_FULL)
+    report_coefficients(m_cur, "ロジット(現行特徴)")
+    report_coefficients(m_all, "ロジット(全特徴)")
+    report_coefficients(m_today, "ロジット+展示")
+    report_coefficients(m_full, "ロジット+当日全部")
 
     candidates = {
         "市場オッズ":            market,
@@ -171,6 +430,10 @@ def main():
         "+級別 +当地":          make_model(w_class=1.0, w_venue=0.5),
         "モーター無し":          make_model(w_motor=0.0, w_class=1.0),
         "ST無し":              make_model(w_st=0.0, w_class=1.0),
+        "ロジット(現行特徴)":     make_logit(m_cur),
+        "ロジット(全特徴)":       make_logit(m_all),
+        "ロジット+展示":          make_logit(m_today),
+        "ロジット+当日全部":       make_logit(m_full),
     }
 
     if not test:
@@ -182,6 +445,8 @@ def main():
 
     _table(train, candidates, f"学習 {len(train)}レース (参考)")
     _table(test, candidates, f"検証 {len(test)}レース (こちらで判断する)")
+    rolling_check(rows, FEATURES_TODAY_FULL,
+                  make_model(w_class=1.0, w_venue=0.5), "ロジット+当日全部 vs 本番モデル")
     _noise_note(len(test))
 
 
@@ -201,6 +466,9 @@ def _table(rows, candidates, label):
     # 「モーターを外した」効果に級別追加の効果が混ざり、
     # 外したこと自体が効いたように見えてしまう。
     _paired_table(rows, candidates, "+級別")
+    # 本番の scoring.py は W_CLASS=1.0 / W_VENUE=0.5、つまり「+級別 +当地」と
+    # 同じ構成。新しい候補の採否はこれを基準に判断しないと意味がない。
+    _paired_table(rows, candidates, "+級別 +当地")
 
 
 def _paired_table(rows, candidates, ref_name):

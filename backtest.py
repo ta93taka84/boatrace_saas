@@ -26,6 +26,7 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from scraper.schedule import get_active_venues
 from scraper.racelist import get_racelist
 from scraper.odds import get_odds
+from scraper.beforeinfo import get_beforeinfo
 from scraper.result import get_result
 from scraper.scoring import estimate_win_prob, course_rates, COURSE_BASE_WIN_RATE
 
@@ -118,7 +119,8 @@ def evaluate(start: str = None, end: str = None):
         "コース基準のみ": lambda r: _normalize(
             {x["lane"]: course_rates(r["venue"]).get(x["lane"], 0.05) for x in r["racers"]}
         ),
-        "モデル(現行)": lambda r: estimate_win_prob(r["racers"], r["venue"]),
+        "モデル(現行)": lambda r: estimate_win_prob(
+            r["racers"], r["venue"], r.get("conditions")),
         "市場オッズ": lambda r: {int(k): v for k, v in r["market_prob"].items()},
     }
 
@@ -283,6 +285,65 @@ def calibrate(start: str = None, end: str = None):
         print("       collect で日数を増やしてから再度 calibrate してください。")
 
 
+
+BEFORE_KEYS = ("weather", "temperature", "water_temp",
+               "wind_speed", "wind_dir_code", "wave_height")
+
+
+def enrich():
+    """
+    収集済みの各行に直前情報（展示タイム・チルト・気象）を足す。
+
+    collect は出走表・オッズ・結果しか取っていない。この3つは前日までに
+    確定している情報で、市場が持っている「当日の艇と水面の状態」を含まない。
+    実験でモデルの形を条件付きロジットに変えても市場オッズとの差が
+    ほとんど縮まらなかったので、足りないのは形ではなく情報だと考えられる。
+    その仮説を検証するために直前情報を後付けする。
+
+    既に conditions を持つ行は飛ばすので、中断しても再実行すれば続きから進む。
+    """
+    rows = [json.loads(l) for l in DATASET.read_text(encoding="utf-8").splitlines() if l.strip()]
+    todo = [r for r in rows if r.get("conditions") is None]
+    print(f"{len(rows)}件のうち {len(todo)}件に直前情報を付ける")
+
+    done = 0
+    for row in todo:
+        try:
+            before = get_beforeinfo(row["date"], row["venue"], row["race_no"])
+        except Exception as e:
+            print(f"  ! {row['date']} {row['venue_name']} R{row['race_no']}: {e}")
+            before = None
+
+        # 取得できなかった行にも空dictを入れる。印が無いと再実行のたびに
+        # 同じページを取りに行くことになる。
+        row["conditions"] = {k: before[k] for k in BEFORE_KEYS} if before else {}
+        if before:
+            lane_map = {r["lane"]: r for r in before["racers"]}
+            for racer in row["racers"]:
+                bi = lane_map.get(racer["lane"])
+                if bi:
+                    for key in ("exhibit_time", "tilt"):
+                        if bi.get(key) is not None:
+                            racer[key] = bi[key]
+
+        done += 1
+        # 1件2秒かかるので全体では数十分になる。途中で止めても
+        # やり直しにならないよう、こまめに書き戻す。
+        if done % 50 == 0:
+            _write_all(rows)
+            print(f"  {done}/{len(todo)}件")
+
+    _write_all(rows)
+    got = sum(1 for r in rows if r.get("conditions"))
+    print(f"付与完了: {done}件を処理 / 直前情報を持つ行は {got}/{len(rows)}件")
+
+
+def _write_all(rows):
+    with DATASET.open("w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + chr(10))
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args:
@@ -297,5 +358,7 @@ if __name__ == "__main__":
         evaluate(start, end)
     elif cmd == "calibrate":
         calibrate(start, end)
+    elif cmd == "enrich":
+        enrich()
     else:
         print(__doc__)

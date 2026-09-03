@@ -1,5 +1,5 @@
 """
-出走表データから各艇の勝率を推定し、市場オッズと比較して期待値を算出する。
+出走表と直前情報から各艇の勝率を推定し、市場オッズと比較して期待値を算出する。
 
 考え方:
   市場勝率だけでは期待値は出せない（定義上どの艇も控除率ぶんのマイナスになる）。
@@ -9,10 +9,14 @@
   EV > 1.0 なら理論上プラス期待値。
 """
 import json
+import math
 from pathlib import Path
 
 # バックテストでモデルが市場オッズを上回るまで False。
 # False の間、EVは参考値であり賭けの根拠にしてはならない。
+#
+# 現状: 検証612レースで LogLoss 1.2661 に対し市場は 1.1671。
+# 対応のある比較で -0.0989 ± 0.015 程度、まだ明確に負けている。
 CALIBRATED = False
 
 TAKEOUT_RATE = 0.25
@@ -56,32 +60,87 @@ def course_rates(venue_code: str | None = None) -> dict[int, float]:
     return {int(k): float(v) for k, v in table.items()}
 
 
-# 各補正の効き具合。
-#
-# 1236レースを日付で学習624/検証612に分割し、検証側で対応のある比較を
-# 行って決めた（py -3 experiment.py）。判定は差が標準誤差の2倍を
-# 超えるかどうか。
-#
-#   W_CLASS  級別の追加は -0.0450 ± 0.0092 で有意な改善。
-#            重み2.0との差は +0.0042 ± 0.0090 で誤差の範囲のため1.0を採る。
-#   W_VENUE  当地勝率の追加は -0.0096 ± 0.0036 で有意な改善。
-#   W_ST     外すと +0.0083 ± 0.0020 悪化するので維持。
-#   W_MOTOR  外しても +0.0047 ± 0.0041 で誤差の範囲。寄与は証明できていないが、
-#            悪化もしないため据え置く。判断には更にデータが要る。
-#
-# この構成でも市場オッズには -0.1315 ± 0.0166 で明確に負けている。
-W_RACER = 1.0   # 全国勝率
-W_MOTOR = 0.5   # モーター2連対率
-W_ST = 0.5      # 平均スタートタイミング
-W_CLASS = 1.0   # 級別（A1/A2/B1/B2）
-W_VENUE = 0.5   # 当地勝率
-
 # 級別を数値化した相対強度。等級の実力差の目安。
 CLASS_STRENGTH = {"A1": 1.0, "A2": 0.72, "B1": 0.5, "B2": 0.35}
 
 
+# ---------------------------------------------------------------- 予測モデル
+#
+# 6艇のうち1着が1つ選ばれる構造なので、条件付きロジット（レース内ソフトマックス）
+# で推定する。
+#
+#   P(i が1着) ∝ コース別1着率(i) × exp(Σ 特徴量(i)の偏差 × 重み)
+#
+# 特徴量はレース内で中心化する。レース間の絶対水準ではなく、同じレースに出ている
+# 6人の中での相対差だけが勝敗を決めるため。コース効果はオフセットに固定し、
+# データからは学ばせない（実測への置き換えは改善しなかった＝ノイズを拾うだけ）。
+#
+# 以前は「平均比の累乗を手で決めた重みで掛ける」形だった。最尤で当てはめ直しても
+# 差は -0.0104 ± 0.0074 で誤差の範囲、つまり形は問題ではなかった。効いたのは
+# 当日の情報を足したこと。
+#
+#   出走表だけの当てはめ    -0.0104 ± 0.0074   誤差の範囲
+#   ＋展示タイム           -0.0135 ± 0.0086   誤差の範囲
+#   ＋展示・チルト・気象     -0.0229 ± 0.0094   改善      ← これを採用
+#
+# 分割位置を5通りに変えても符号と大きさが安定していたので、多重比較で
+# たまたま拾った差ではない。学習データが増えるほど差は広がった。
+#
+# 係数は標準偏差で割る前の生の値に対する重み（当てはめ時の係数÷尺度）。
+# 全1236レースで当てはめ直した値。判断は日付で分けた検証側で行い、
+# 配備するときだけ全データで取り直す。
+#
+# 注意: wind_inner は当てはめ直すと符号が反転する程度に小さく、
+#       in2_rate_all はほぼ0。どちらも寄与は無いに等しい。データが増えた
+#       段階で外すかどうかを判断すること。今は検証した構成のまま出す。
+LOGIT_WEIGHTS = {
+    "win_rate_all":   0.361216,
+    "class":          0.683208,
+    "win_rate_venue": 0.102112,
+    "st":             8.232190,   # 平均STは値の幅が0.02秒程度なので重みが大きく出る
+    "motor_in2_rate": 0.013806,
+    "boat_in2_rate":  0.003394,
+    "weight":        -0.041846,   # 重いほど不利
+    "f_count":       -0.223917,   # フライング歴はスタートを慎重にさせる
+    "in2_rate_all":   0.000332,
+    "exhibit":        3.530421,   # 展示タイム（速いほど有利になる向きに符号反転済み）
+    "tilt":           0.180521,
+    "wind_inner":    -0.019717,   # 風×1号艇
+    "wave_inner":    -0.049856,   # 波高×1号艇。荒れると内枠の優位が削られる
+}
+
+# 0が「欠損」ではなく正当な値である特徴量。
+# F回数0は「フライング歴が無い」という情報であって、欠測ではない。
+# ここを取り違えると、きれいな選手が全員「平均並み」に潰れて信号が消える。
+# 風と波の交互作用も、内枠以外は定義上0になる。
+ZERO_IS_VALID = {"tilt", "f_count", "wind_inner", "wave_inner"}
+
+
+def _feature(racer: dict, name: str, conditions: dict | None) -> float:
+    """1艇ぶんの特徴量。大きいほど有利になる向きに符号を揃える。"""
+    if name == "class":
+        return CLASS_STRENGTH.get(racer.get("class"), 0.5)
+    if name == "st":
+        # 平均STは小さいほど良いので符号を反転する
+        return -(racer.get("avg_st") or 0.0)
+    if name == "exhibit":
+        # 展示タイムも小さいほど速い
+        return -(racer.get("exhibit_time") or 0.0)
+    if name in ("wind_inner", "wave_inner"):
+        # 風と波は1レースで共通の値なので、そのままでは正規化で打ち消し合って
+        # 何も効かない。効くとすれば「荒れると内枠の優位が削られる」という形なので、
+        # 1号艇との交互作用として入れる。
+        if racer["lane"] != 1:
+            return 0.0
+        cond = conditions or {}
+        key = "wind_speed" if name == "wind_inner" else "wave_height"
+        return cond.get(key) or 0.0
+    return racer.get(name) or 0.0
+
+
 def score_race(racers: list[dict], market_prob: dict[int, float] | None,
-               venue_code: str | None = None) -> dict:
+               venue_code: str | None = None,
+               conditions: dict | None = None) -> dict:
     """
     戻り値:
     {
@@ -91,8 +150,9 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
       "top_ev": 1.21,
     }
     market_prob が無い場合は ev を空で返す。
+    conditions（気象）が無い場合は風と波の項が落ちるだけで、他はそのまま効く。
     """
-    model_prob = estimate_win_prob(racers, venue_code)
+    model_prob = estimate_win_prob(racers, venue_code, conditions)
     if not model_prob:
         return {}
 
@@ -111,8 +171,9 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
     return result
 
 
-def estimate_win_prob(racers: list[dict], venue_code: str | None = None) -> dict[int, float]:
-    """コース別ベースラインに選手・モーター・STの相対補正を掛けて正規化する。"""
+def estimate_win_prob(racers: list[dict], venue_code: str | None = None,
+                      conditions: dict | None = None) -> dict[int, float]:
+    """コース別1着率を土台に、レース内で中心化した特徴量の重み付き和で補正する。"""
     if not racers:
         return {}
 
@@ -120,40 +181,32 @@ def estimate_win_prob(racers: list[dict], venue_code: str | None = None) -> dict
     def course_of(r):
         return r.get("actual_course") or r["lane"]
 
-    mean_win = _mean([r.get("win_rate_all", 0) for r in racers])
-    mean_motor = _mean([r.get("motor_in2_rate", 0) for r in racers])
-    mean_st = _mean([r.get("avg_st", 0) for r in racers])
-    mean_class = _mean([CLASS_STRENGTH.get(r.get("class"), 0.5) for r in racers])
-    mean_venue = _mean([r.get("win_rate_venue", 0) for r in racers])
+    # レース内での偏差を取る。欠損は平均に置き換える＝その艇だけ補正なしになる。
+    deviations = {}
+    for name in LOGIT_WEIGHTS:
+        values = [_feature(r, name, conditions) for r in racers]
+        if name in ZERO_IS_VALID:
+            mean = sum(values) / len(values)
+        else:
+            present = [v for v in values if v]
+            mean = sum(present) / len(present) if present else 0.0
+            values = [v if v else mean for v in values]
+        deviations[name] = [v - mean for v in values]
 
     base_rates = course_rates(venue_code)
-    raw = {}
-    for r in racers:
-        base = base_rates.get(course_of(r), 0.05)
-        score = base
-        score *= _ratio(r.get("win_rate_all", 0), mean_win) ** W_RACER
-        score *= _ratio(r.get("motor_in2_rate", 0), mean_motor) ** W_MOTOR
-        # STは小さいほど良いので比を反転
-        score *= _ratio(mean_st, r.get("avg_st", 0)) ** W_ST
-        score *= _ratio(CLASS_STRENGTH.get(r.get("class"), 0.5), mean_class) ** W_CLASS
-        # 当地勝率は初出走の選手などで0になる。_ratio が補正なしに落とす。
-        score *= _ratio(r.get("win_rate_venue", 0), mean_venue) ** W_VENUE
-        raw[r["lane"]] = score
+    utilities = []
+    for i, r in enumerate(racers):
+        base = max(base_rates.get(course_of(r), 0.05), 1e-6)
+        u = math.log(base)
+        for name, weight in LOGIT_WEIGHTS.items():
+            u += deviations[name][i] * weight
+        utilities.append(u)
 
-    total = sum(raw.values())
+    # exp の桁あふれを避けるため最大値を引いてから指数を取る
+    top = max(utilities)
+    exps = [math.exp(u - top) for u in utilities]
+    total = sum(exps)
     if total <= 0:
         return {}
 
-    return {lane: round(v / total, 4) for lane, v in raw.items()}
-
-
-def _mean(values: list[float]) -> float:
-    valid = [v for v in values if v and v > 0]
-    return sum(valid) / len(valid) if valid else 0.0
-
-
-def _ratio(value: float, mean: float) -> float:
-    """平均比。データ欠損時は補正なし(1.0)に落とす。極端な値は 0.5〜2.0 に丸める。"""
-    if not value or not mean or value <= 0 or mean <= 0:
-        return 1.0
-    return min(max(value / mean, 0.5), 2.0)
+    return {r["lane"]: round(exps[i] / total, 4) for i, r in enumerate(racers)}
