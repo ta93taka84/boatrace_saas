@@ -11,8 +11,15 @@ name: collect
 # 約5倍なので、所要時間を見積もるときはこの差を忘れないこと。
 #
 # GitHub Actionsのcronは UTC。JST = UTC+9。
-# なお cron は混雑時に5〜15分遅延することがあるため、prerace は
-# 締切40分前という広めの窓を取って取りこぼしを防いでいる。
+#
+# 重要: スケジュールは保証されない。実測では morning が99分、
+# results が4時間遅れ、30分毎に設定した prerace は1日1回しか
+# 発火しなかった。高頻度に設定するほど間引かれやすい。
+#
+# そのため prerace は毎時に落とし、代わりに窓を75分と広く取る。
+# 発火が1〜2時間飛んでも、次の実行で取りこぼしを拾えるようにするため。
+# results も、遅延で日付が変わっても前日を対象にするようjobs.py側で
+# 判定している。
 #
 # 注意: スケジュール実行はリポジトリが60日間無活動になると自動で停止する。
 #       停止したらGitHubのUIから手動で再有効化が必要。
@@ -20,7 +27,7 @@ name: collect
 on:
   schedule:
     - cron: '0 0 * * *'        # 09:00 JST 出走表
-    - cron: '*/30 1-12 * * *'  # 10:00-21:30 JST 直前情報とオッズ
+    - cron: '0 1-12 * * *'     # 10:00-21:00 JST 直前情報とオッズ（毎時）
     - cron: '0 13 * * *'       # 22:00 JST 確定結果
   workflow_dispatch:
     inputs:
@@ -66,9 +73,9 @@ jobs:
             echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
           else
             case "${{ github.event.schedule }}" in
-              '0 0 * * *')       echo "job=morning" >> "$GITHUB_OUTPUT" ;;
-              '0 13 * * *')      echo "job=results" >> "$GITHUB_OUTPUT" ;;
-              *)                 echo "job=prerace" >> "$GITHUB_OUTPUT" ;;
+              '0 0 * * *')   echo "job=morning" >> "$GITHUB_OUTPUT" ;;
+              '0 13 * * *')  echo "job=results" >> "$GITHUB_OUTPUT" ;;
+              *)             echo "job=prerace" >> "$GITHUB_OUTPUT" ;;
             esac
           fi
 
@@ -78,7 +85,13 @@ jobs:
         run: python -m unittest discover -s tests
 
       - name: 収集
-        run: python jobs.py ${{ steps.pick.outputs.job }}
+        run: |
+          if [ "${{ steps.pick.outputs.job }}" = "prerace" ]; then
+            # 発火が飛んでも拾えるよう窓を広く取る（スケジュールは保証されない）
+            python jobs.py prerace --window 75
+          else
+            python jobs.py ${{ steps.pick.outputs.job }}
+          fi
 
       - name: Supabaseへ取り込み
         if: env.DATABASE_URL != ''

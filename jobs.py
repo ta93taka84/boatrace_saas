@@ -5,9 +5,10 @@ GitHub Actionsから呼ぶ収集ジョブ。
 GitHub Actionsの無料枠(private 2,000分/月)を使い切る。そのため
 用途ごとにジョブを分け、直前情報とオッズは「締切が近いレースだけ」に絞る。
 
-  morning  : その日の全レースの出走表を取得（1日1回・約6分）
-  prerace  : 締切がN分以内のレースだけ直前情報とオッズを取得（毎時・約1分）
-  results  : その日の確定結果を取得（1日1回・約6分）
+  morning  : その日の全レースの出走表を取得（1日1回）
+  prerace  : 締切がN分以内のレースだけ直前情報とオッズを取得（毎時）
+  results  : 確定結果を取得（1日1回）。実行が深夜〜昼にずれ込んだ場合は
+             前日を対象にする。GitHubのスケジュールは数時間遅れうるため。
 
 使い方:
   py -3 jobs.py morning
@@ -206,9 +207,26 @@ def _healthcheck(data: dict, targets: list):
     print("健全性チェック: 問題なし")
 
 
+def _target_result_date() -> str:
+    """
+    結果を取りに行くべき開催日を返す。
+
+    resultsは22:00 JSTに走る想定だが、GitHub Actionsのスケジュールは
+    数時間遅れることがある。実際に4時間遅れて翌02:00に走り、
+    「まだ開催していない当日」の結果を取りに行って0件で終わった。
+
+    深夜から昼までに走った場合は、直前の開催日（前日）を対象にする。
+    12時を境にするのは、遅延が12時間を超えることは考えにくく、
+    かつ当日の全レースが終わるのは概ね21時以降だから。
+    """
+    now = datetime.now()
+    target = now if now.hour >= 12 else now - timedelta(days=1)
+    return target.strftime("%Y%m%d")
+
+
 def results(date_str: str = None):
     """その日の確定結果を取得する。全レース終了後に1回走らせる。"""
-    date_str = date_str or _today()
+    date_str = date_str or _target_result_date()
     data = _load(date_str)
     venues = get_active_venues(date_str)
 
