@@ -83,7 +83,7 @@ def load_pipeline_output(path: Path):
     race_date = _to_date(data["date"])
 
     with connect() as conn, conn.cursor() as cur:
-        races = entries = odds = preds = 0
+        races = entries = odds = preds = finals = 0
         for venue in data["venues"]:
             for race in venue["races"]:
                 race_id = _upsert_race(cur, race_date, venue["code"], race)
@@ -95,9 +95,15 @@ def load_pipeline_output(path: Path):
                 if race.get("model_prob"):
                     _upsert_prediction(cur, race_id, race)
                     preds += 1
+                # 結果はモデル較正の正解データ。ここが抜けていたため、
+                # resultsジョブが取得した確定着順はDBに入っていなかった。
+                if race.get("result"):
+                    _upsert_result(cur, race_id, race["result"])
+                    finals += 1
         conn.commit()
 
-    print(f"取り込み完了: races={races} entries={entries} odds={odds} predictions={preds}")
+    print(f"取り込み完了: races={races} entries={entries} odds={odds} "
+          f"predictions={preds} results={finals}")
 
 
 def load_results(path: Path):
@@ -115,22 +121,27 @@ def load_results(path: Path):
             found = cur.fetchone()
             if not found:
                 continue  # レース本体が未取り込み
-            cur.execute(
-                """
-                insert into race_results (race_id, winner_lane, finish, kimarite, payouts)
-                values (%s, %s, %s, %s, %s)
-                on conflict (race_id) do update set
-                  winner_lane = excluded.winner_lane,
-                  finish      = excluded.finish,
-                  kimarite    = excluded.kimarite,
-                  payouts     = excluded.payouts
-                """,
-                (found[0], row.get("winner_lane"), Jsonb(row.get("finish", {})),
-                 row.get("kimarite"), Jsonb(row.get("payouts", {}))),
-            )
+            _upsert_result(cur, found[0], row)
             n += 1
         conn.commit()
     print(f"結果取り込み完了: {n}件")
+
+
+def _upsert_result(cur, race_id, result):
+    """確定結果を書く。日次JSONとbacktestのjsonlで同じ形なので共用する。"""
+    cur.execute(
+        """
+        insert into race_results (race_id, winner_lane, finish, kimarite, payouts)
+        values (%s, %s, %s, %s, %s)
+        on conflict (race_id) do update set
+          winner_lane = excluded.winner_lane,
+          finish      = excluded.finish,
+          kimarite    = excluded.kimarite,
+          payouts     = excluded.payouts
+        """,
+        (race_id, result.get("winner_lane"), Jsonb(result.get("finish", {})),
+         result.get("kimarite"), Jsonb(result.get("payouts", {}))),
+    )
 
 
 def _upsert_race(cur, race_date, venue_code, race) -> int:

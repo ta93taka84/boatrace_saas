@@ -84,18 +84,27 @@ jobs:
       - name: パーサーの回帰テスト
         run: python -m unittest discover -s tests
 
+      # 対象日はここで一度だけ決め、収集と取り込みの両方に同じ値を渡す。
+      # 取り込み側で date +%Y%m%d と組み立て直していたときは、
+      # resultsが遅延して前日を対象にすると、収集は前日のファイルを書くのに
+      # 取り込みは存在しない当日のファイルを見に行き、
+      # 「取り込むデータなし」と表示して正常終了していた。
       - name: 収集
+        id: collect
         run: |
-          if [ "${{ steps.pick.outputs.job }}" = "prerace" ]; then
+          JOB='${{ steps.pick.outputs.job }}'
+          DATE="$(python jobs.py target-date "$JOB")"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          if [ "$JOB" = "prerace" ]; then
             # 発火が飛んでも拾えるよう窓を広く取る（スケジュールは保証されない）
-            python jobs.py prerace --window 75
+            python jobs.py prerace --window 75 "$DATE"
           else
-            python jobs.py ${{ steps.pick.outputs.job }}
+            python jobs.py "$JOB" "$DATE"
           fi
 
       - name: Supabaseへ取り込み
         if: env.DATABASE_URL != ''
-        run: python -m db.loader "output/$(date +%Y%m%d).json"
+        run: python -m db.loader "output/${{ steps.collect.outputs.date }}.json"
 
       # 取得結果はリポジトリにコミットしない。公式サイトのデータを
       # 再配布しないため、また毎日数百KBずつ履歴が膨らむのを避けるため。

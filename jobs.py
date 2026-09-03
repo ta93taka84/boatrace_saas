@@ -14,6 +14,7 @@ GitHub Actionsの無料枠(private 2,000分/月)を使い切る。そのため
   py -3 jobs.py morning
   py -3 jobs.py prerace --window 40
   py -3 jobs.py results [YYYYMMDD]
+  py -3 jobs.py target-date results   # 対象日だけを出力する
 """
 import io
 import json
@@ -224,6 +225,19 @@ def _target_result_date() -> str:
     return target.strftime("%Y%m%d")
 
 
+def _job_date(cmd: str) -> str:
+    """
+    そのジョブが対象とすべき開催日。
+
+    ワークフローが収集と取り込みで同じ日付を使えるよう、外から引ける形にしてある。
+    以前は取り込み側がシェルの date +%Y%m%d で当日を組み立てていたため、
+    resultsが遅延して前日を対象にしたとき、収集は前日のファイルを書くのに
+    取り込みは存在しない当日のファイルを見に行き、
+    「取り込むデータなし」と表示して正常終了していた。
+    """
+    return _target_result_date() if cmd == "results" else _today()
+
+
 def results(date_str: str = None):
     """その日の確定結果を取得する。全レース終了後に1回走らせる。"""
     date_str = date_str or _target_result_date()
@@ -263,7 +277,9 @@ if __name__ == "__main__":
     positional = [a for a in args[1:] if a.isdigit() and len(a) == 8]
     date_arg = positional[0] if positional else None
 
-    if cmd == "morning":
+    if cmd == "target-date":
+        print(_job_date(args[1] if len(args) > 1 else ""))
+    elif cmd == "morning":
         morning(date_arg)
     elif cmd == "prerace":
         prerace(window, date_arg)
