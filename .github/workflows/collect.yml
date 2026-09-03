@@ -13,13 +13,21 @@ name: collect
 # GitHub Actionsのcronは UTC。JST = UTC+9。
 #
 # 重要: スケジュールは保証されない。実測では morning が99分、
-# results が4時間遅れ、30分毎に設定した prerace は1日1回しか
+# results が4時間遅れ、30分毎に設定した prerace は1日1〜2回しか
 # 発火しなかった。高頻度に設定するほど間引かれやすい。
 #
-# そのため prerace は毎時に落とし、代わりに窓を75分と広く取る。
-# 発火が1〜2時間飛んでも、次の実行で取りこぼしを拾えるようにするため。
-# results も、遅延で日付が変わっても前日を対象にするようjobs.py側で
-# 判定している。
+# その結果、稼働2日でオッズが取れたのは10レースだけだった。締切前の
+# 情報は「発火時刻の精度」に全面的に依存するので、毎時の発火を前提に
+# した設計は成立しない。
+#
+# そこで prerace は prerace-loop に置き換える。1回起動したらプロセス内で
+# ループし、指定時刻まで20分ごとに収集を繰り返す。発火回数への依存が
+# 無くなるうえ、窓を30分と狭く取れるので締切に近いオッズが取れる。
+#
+# 1ジョブの上限が6時間なので、開催時間帯を3本に分けて起動する。
+# 1本が間引かれても、残りの時間帯は影響を受けない。
+#
+# results は遅延で日付が変わっても前日を対象にするようjobs.py側で判定している。
 #
 # 注意: スケジュール実行はリポジトリが60日間無活動になると自動で停止する。
 #       停止したらGitHubのUIから手動で再有効化が必要。
@@ -27,7 +35,9 @@ name: collect
 on:
   schedule:
     - cron: '0 0 * * *'        # 09:00 JST 出走表
-    - cron: '0 1-12 * * *'     # 10:00-21:00 JST 直前情報とオッズ（毎時）
+    - cron: '30 0 * * *'       # 09:30 JST 直前情報ループ → 13:30 まで
+    - cron: '30 4 * * *'       # 13:30 JST 直前情報ループ → 17:30 まで
+    - cron: '30 8 * * *'       # 17:30 JST 直前情報ループ → 21:40 まで
     - cron: '0 13 * * *'       # 22:00 JST 確定結果
   workflow_dispatch:
     inputs:
@@ -36,7 +46,8 @@ on:
         required: true
         default: prerace
         type: choice
-        options: [morning, prerace, results]
+        # prerace は1回だけ走る動作確認用。本番は prerace-loop。
+        options: [morning, prerace, prerace-loop, results]
 
 concurrency:
   group: collect
@@ -45,10 +56,12 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    # morning は169リクエスト、results は156リクエスト。
-    # ランナーからは1リクエスト約12秒かかるため、どちらも30分では
-    # 足りず打ち切られる。実測34分・31分に余裕を持たせて60分にする。
-    timeout-minutes: 60
+    # morning は169リクエスト、results は156リクエスト。ランナーからは
+    # 1リクエスト約12秒かかるため、どちらも30分では足りず打ち切られる
+    # （実測34分・31分）。prerace-loop は最長4時間ループするので、
+    # GitHubの上限である360分をそのまま指定する。
+    # ループ自身が終了時刻を持っているので、これは保険でしかない。
+    timeout-minutes: 360
     env:
       TZ: Asia/Tokyo
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -71,11 +84,17 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
+            echo "until=21:40" >> "$GITHUB_OUTPUT"
           else
             case "${{ github.event.schedule }}" in
               '0 0 * * *')   echo "job=morning" >> "$GITHUB_OUTPUT" ;;
               '0 13 * * *')  echo "job=results" >> "$GITHUB_OUTPUT" ;;
-              *)             echo "job=prerace" >> "$GITHUB_OUTPUT" ;;
+              '30 0 * * *')  echo "job=prerace-loop" >> "$GITHUB_OUTPUT"
+                             echo "until=13:30" >> "$GITHUB_OUTPUT" ;;
+              '30 4 * * *')  echo "job=prerace-loop" >> "$GITHUB_OUTPUT"
+                             echo "until=17:30" >> "$GITHUB_OUTPUT" ;;
+              *)             echo "job=prerace-loop" >> "$GITHUB_OUTPUT"
+                             echo "until=21:40" >> "$GITHUB_OUTPUT" ;;
             esac
           fi
 
@@ -84,27 +103,61 @@ jobs:
       - name: パーサーの回帰テスト
         run: python -m unittest discover -s tests
 
-      # 対象日はここで一度だけ決め、収集と取り込みの両方に同じ値を渡す。
+      # 対象日はここで一度だけ決め、収集・取り込み・キャッシュに同じ値を渡す。
       # 取り込み側で date +%Y%m%d と組み立て直していたときは、
       # resultsが遅延して前日を対象にすると、収集は前日のファイルを書くのに
       # 取り込みは存在しない当日のファイルを見に行き、
       # 「取り込むデータなし」と表示して正常終了していた。
+      - name: 対象日を決める
+        id: date
+        run: |
+          echo "date=$(python jobs.py target-date '${{ steps.pick.outputs.job }}')" >> "$GITHUB_OUTPUT"
+
+      # output/ はリポジトリに入れないので、ジョブ間で受け渡すにはキャッシュが要る。
+      # 無いと prerace-loop が出走表を1レースずつ取り直し、同じ日の朝に
+      # morning が取ったのと同じものを、1日ぶんもう一度取得することになる
+      # （約170リクエスト）。公式サイトへの負荷を倍にしないため。
+      - name: 収集済みデータの復元
+        uses: actions/cache/restore@v4
+        with:
+          path: output
+          key: output-${{ steps.date.outputs.date }}-
+          restore-keys: output-${{ steps.date.outputs.date }}-
+
       - name: 収集
         id: collect
         run: |
           JOB='${{ steps.pick.outputs.job }}'
-          DATE="$(python jobs.py target-date "$JOB")"
-          echo "date=$DATE" >> "$GITHUB_OUTPUT"
-          if [ "$JOB" = "prerace" ]; then
-            # 発火が飛んでも拾えるよう窓を広く取る（スケジュールは保証されない）
-            python jobs.py prerace --window 75 "$DATE"
-          else
-            python jobs.py "$JOB" "$DATE"
-          fi
+          DATE='${{ steps.date.outputs.date }}'
+          case "$JOB" in
+            prerace-loop)
+              python jobs.py prerace-loop --until '${{ steps.pick.outputs.until }}' --interval 20 --window 30 "$DATE"
+              ;;
+            prerace)
+              # 1回だけ走る動作確認用。本番のスケジュールは prerace-loop。
+              python jobs.py prerace --window 40 "$DATE"
+              ;;
+            *)
+              python jobs.py "$JOB" "$DATE"
+              ;;
+          esac
 
+      # キャッシュのキーは一度書くと変えられないので、run_id を付けて毎回別の
+      # キーで保存し、復元側は接頭辞一致で最新を拾う。収集が途中で落ちても
+      # そこまでの取得結果は残したいので always() で保存する。
+      - name: 収集済みデータの保存
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: output
+          key: output-${{ steps.date.outputs.date }}-${{ github.run_id }}
+
+      # prerace-loop は各パスの直後に自分で取り込むので、ここでは走らせない。
+      # オッズは時系列として追記されるテーブルなので、同じファイルを二度
+      # 通すと同じ値のスナップショットが重複して積まれる。
       - name: Supabaseへ取り込み
-        if: env.DATABASE_URL != ''
-        run: python -m db.loader "output/${{ steps.collect.outputs.date }}.json"
+        if: env.DATABASE_URL != '' && steps.pick.outputs.job != 'prerace-loop'
+        run: python -m db.loader "output/${{ steps.date.outputs.date }}.json"
 
       # 取得結果はリポジトリにコミットしない。公式サイトのデータを
       # 再配布しないため、また毎日数百KBずつ履歴が膨らむのを避けるため。
