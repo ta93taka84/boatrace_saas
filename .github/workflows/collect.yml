@@ -48,6 +48,14 @@ on:
         type: choice
         # prerace は1回だけ走る動作確認用。本番は prerace-loop。
         options: [morning, prerace, prerace-loop, results]
+      until:
+        # cronが飛んだ時間帯を手動で埋めるときに使う。既定のまま昼過ぎに
+        # 起動すると6時間の上限に当たって打ち切られるので、次の定時起動の
+        # 直前を指定する。
+        description: 'prerace-loop の終了時刻 (JST, HH:MM)'
+        required: false
+        default: '21:40'
+        type: string
 
 concurrency:
   group: collect
@@ -84,7 +92,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
-            echo "until=21:40" >> "$GITHUB_OUTPUT"
+            echo "until=${{ inputs.until }}" >> "$GITHUB_OUTPUT"
           else
             case "${{ github.event.schedule }}" in
               '0 0 * * *')   echo "job=morning" >> "$GITHUB_OUTPUT" ;;
