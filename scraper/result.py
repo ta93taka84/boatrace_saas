@@ -18,7 +18,17 @@ def get_result(date_str: str, venue_code: str, race_no: int) -> dict | None:
     中止・不成立などで着順が取れない場合は None。
     """
     params = {"rno": race_no, "jcd": venue_code, "hd": date_str}
-    html = fetch("/owpc/pc/race/raceresult", params=params)
+    return parse_result(fetch("/owpc/pc/race/raceresult", params=params), race_no)
+
+
+def result_params(date_str: str, venue_code: str, race_no: int) -> dict:
+    """このページのキャッシュを引くためのパラメータ。session.cached に渡す。"""
+    return {"rno": race_no, "jcd": venue_code, "hd": date_str}
+
+
+def parse_result(html: bytes, race_no: int) -> dict | None:
+    """取得済みのHTMLから結果を組み立てる。取得と分けてあるのは、
+    収集済みの行にキャッシュから項目を足すときサイトを叩かないため。"""
     soup = BeautifulSoup(html, "lxml")
 
     finish = _parse_finish(soup)

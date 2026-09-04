@@ -57,6 +57,18 @@ def fetch(path: str, params: dict = None) -> bytes:
     return resp.content
 
 
+def cached(path: str, params: dict = None) -> bytes | None:
+    """
+    キャッシュにあればそれを返し、無ければ None。**サイトは叩かない。**
+
+    収集済みの行に後から項目を足すときに使う。fetch を使うと、キャッシュが
+    無い行のぶんだけ黙ってサイトへ出て行く。すでに取ったページから
+    読み直すだけの処理は、取りに行く可能性そのものを持たないほうがよい。
+    """
+    p = _cache_path(path, params)
+    return p.read_bytes() if p and p.exists() else None
+
+
 def _cache_path(path: str, params: dict | None) -> Path | None:
     """過去日のリクエストにだけキャッシュパスを割り当てる。"""
     if not params:

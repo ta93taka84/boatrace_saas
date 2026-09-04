@@ -5,6 +5,7 @@
   py -3 backtest.py collect   20260825 20260901  # 期間データを cache/ に収集
   py -3 backtest.py eval      20260825 20260901  # 収集済みデータで評価
   py -3 backtest.py calibrate 20260825 20260901  # 場別コース勝率を書き出す
+  py -3 backtest.py backfill-start              # 進入コースとSTをキャッシュから後付け
 
 collect は過去日のみキャッシュされるため、eval と calibrate は
 サイトを叩き直さずに何度でも再実行できる。較正のパラメータを
@@ -26,8 +27,9 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from scraper.schedule import get_active_venues
 from scraper.racelist import get_racelist
 from scraper.odds import get_odds
-from scraper.beforeinfo import get_beforeinfo
-from scraper.result import get_result
+from scraper.beforeinfo import get_beforeinfo, parse_beforeinfo, beforeinfo_params
+from scraper.result import get_result, parse_result, result_params
+from scraper.session import cached
 from scraper.scoring import estimate_win_prob, COURSE_BASE_WIN_RATE
 
 DATASET = Path("output/backtest.jsonl")
@@ -91,6 +93,7 @@ def _build_row(date_str, venue, rno):
         "winner_lane": result["winner_lane"],
         "trifecta_payout": result["payouts"].get("3連単", {}).get("payout"),
         "kimarite": result.get("kimarite"),
+        "start": result.get("start"),
     }
 
 
@@ -412,6 +415,52 @@ def enrich():
     print(f"付与完了: {done}件を処理 / 直前情報を持つ行は {got}/{len(rows)}件")
 
 
+def backfill_start(): 
+    """
+    収集済みの各行に、本番のスタート（進入コース・ST）とスタート展示を足す。
+    **キャッシュだけを読み、サイトは叩かない。**
+
+    collect は着順しか保存していなかったので、進入コースとSTが落ちている。
+    どちらもすでに取得済みのページの中にあり、CLAUDE.md の
+    「同じ情報を二度取りに行かない」に従ってキャッシュから読み直す。
+    session.cached は取りに行く経路そのものを持たないので、
+    キャッシュに無い行は空のまま印を付けて飛ばす。
+
+    進入コースは枠番と別物で、実測では結果ページの18.1%が一致しない。
+    スタート展示のほうは締切前に分かるので、予測の特徴量にできる。
+    """
+    rows = [json.loads(l) for l in DATASET.read_text(encoding="utf-8").splitlines() if l.strip()]
+    todo = [r for r in rows if r.get("start") is None]
+    print(f"{len(rows)}件のうち {len(todo)}件にスタート情報を付ける（キャッシュのみ）")
+
+    got_start = got_ex = miss_start = miss_ex = 0
+    for row in todo:
+        key = (row["date"], row["venue"], row["race_no"])
+
+        html = cached("/owpc/pc/race/raceresult", result_params(*key))
+        parsed = parse_result(html, row["race_no"]) if html else None
+        row["start"] = (parsed or {}).get("start") or []
+        if row["start"]:
+            got_start += 1
+        else:
+            miss_start += 1
+
+        html = cached("/owpc/pc/race/beforeinfo", beforeinfo_params(*key))
+        parsed = parse_beforeinfo(html, row["race_no"]) if html else None
+        row["start_exhibition"] = (parsed or {}).get("start_exhibition") or []
+        if row["start_exhibition"]:
+            got_ex += 1
+        else:
+            miss_ex += 1
+
+    _write_all(rows)
+    print(f"本番スタート  : {got_start}件 付与 / {miss_start}件 はキャッシュに無し")
+    print(f"スタート展示  : {got_ex}件 付与 / {miss_ex}件 はキャッシュに無し")
+    total_start = sum(1 for r in rows if r.get("start"))
+    total_ex = sum(1 for r in rows if r.get("start_exhibition"))
+    print(f"保有状況      : 本番 {total_start}/{len(rows)} / 展示 {total_ex}/{len(rows)}")
+
+
 def _write_all(rows):
     with DATASET.open("w", encoding="utf-8") as f:
         for r in rows:
@@ -434,5 +483,7 @@ if __name__ == "__main__":
         calibrate(start, end)
     elif cmd == "enrich":
         enrich()
+    elif cmd == "backfill-start":
+        backfill_start()
     else:
         print(__doc__)
