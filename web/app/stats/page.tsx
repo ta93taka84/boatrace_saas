@@ -153,7 +153,6 @@ export default async function StatsPage() {
                   flex: 1,
                   height: 14,
                   background: "var(--grid)",
-                  borderRadius: 4,
                   overflow: "hidden",
                 }}
               >
@@ -163,7 +162,6 @@ export default async function StatsPage() {
                     width: `${k.share * 100}%`,
                     height: "100%",
                     background: "var(--seq-mid)",
-                    borderRadius: 4,
                   }}
                 />
               </div>

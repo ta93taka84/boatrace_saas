@@ -91,8 +91,25 @@ export default async function RacePage({
   // 展示タイムが1つも無い日は列ごと出さない。「—」が6個並ぶと壊れて見える。
   const hasExhibit = exhibitPresent.length > 0;
 
-  // 着順は {艇番: 着順} で入っている。表示は着順の順に並べ替える。
   const cell = (isBest: boolean) => (isBest ? "num best" : "num");
+
+  // モーターとボートは「番号（2連対率）」を1セルに詰めている。比較しているのは
+  // 率のほうなので、太字は率だけに付ける。セル全体を太字にすると、隣り合う
+  // 番号のほうが先に目に入り、番号が最良の値だと読めてしまう。
+  const partCell = (no: number, rate: number, isBest: boolean) => (
+    <td className="num">
+      {no}
+      <span
+        className={isBest ? undefined : "muted"}
+        style={isBest ? { fontWeight: 700 } : undefined}
+      >
+        {" "}
+        ({rate.toFixed(1)}%)
+      </span>
+    </td>
+  );
+
+  // 着順は {艇番: 着順} で入っている。表示は着順の順に並べ替える。
 
   const finishOrder = race.result
     ? Object.entries(race.result.finish ?? {})
@@ -208,14 +225,8 @@ export default async function RacePage({
                     <td className="num">
                       {r.f_count}/{r.l_count}
                     </td>
-                    <td className={cell(r.motor_in2_rate === bestMotor)}>
-                      {r.motor_no}
-                      <span className="muted"> ({r.motor_in2_rate.toFixed(1)}%)</span>
-                    </td>
-                    <td className={cell(r.boat_in2_rate === bestBoat)}>
-                      {r.boat_no}
-                      <span className="muted"> ({r.boat_in2_rate.toFixed(1)}%)</span>
-                    </td>
+                    {partCell(r.motor_no, r.motor_in2_rate, r.motor_in2_rate === bestMotor)}
+                    {partCell(r.boat_no, r.boat_in2_rate, r.boat_in2_rate === bestBoat)}
                     {hasExhibit && (
                       <td className={cell(r.exhibit_time === bestExhibit)}>
                         {r.exhibit_time ? r.exhibit_time.toFixed(2) : "—"}
@@ -237,6 +248,13 @@ export default async function RacePage({
             max={1}
             format={(v) => `${(v * 100).toFixed(1)}%`}
           />
+          {race.overround != null && (
+            <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 10 }}>
+              控除前オッズ総和{" "}
+              <span className="num">{race.overround.toFixed(3)}</span>
+              （控除率25%なら約1.334）
+            </p>
+          )}
         </div>
 
         <div className="card">

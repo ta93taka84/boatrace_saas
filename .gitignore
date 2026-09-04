@@ -13,6 +13,9 @@ output/
 web/node_modules/
 web/.next/
 
+# tsc --noEmit が吐く増分ビルド情報。生成物なので追跡しない。
+web/tsconfig.tsbuildinfo
+
 # Vercel / Next.js のローカル環境変数
 web/.env*.local
 .vercel
