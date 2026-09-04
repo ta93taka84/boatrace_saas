@@ -163,6 +163,40 @@ from predictions p
 join race_results r using (race_id)
 group by p.model_version;
 
+-- ------------------------------------------------------- オッズ推移（重複を畳む）
+-- odds_snapshots を「内容が動いた瞬間だけ」に畳んだビュー。推移を読むときは
+-- 生のテーブルではなくこちらを使う。
+--
+-- なぜ要るか。prerace-loop は各パスの直後に日次ファイル「全体」を取り込む設計
+-- なので、一度取得したレースが以降の全パスで再投入される。loader の
+-- _insert_odds が直前と同じ内容を弾くようになる前に積まれた行が残っており、
+-- 実測で2026-09-03 に1レース13件、overround が全部同じ値のまま9時間にわたる、
+-- という並びができている。captured_at が実際の取得時刻を表していないので、
+-- そのまま推移として読むと「9時間動かなかった」という嘘になる。
+--
+-- 行は消さない。削除は不可逆で、各レースの最初の1件は本物だからである。
+-- 読む側で畳めば、本物だけが残り、事故の記録も失われない。
+--
+-- 注意: 畳む判定は overround と market_prob の一致で行う。三連単の内訳
+-- (trifecta) だけが動いて1着確率が完全に一致する場合は同一とみなす。
+-- loader の重複防御と同じ基準に合わせてあり、実際に起きる頻度は未確認。
+
+create or replace view odds_series
+with (security_invoker = true) as
+select race_id, captured_at, overround, market_prob, trifecta
+from (
+  select
+    o.race_id, o.captured_at, o.overround, o.market_prob, o.trifecta,
+    row_number()       over w as rn,
+    lag(o.overround)   over w as prev_overround,
+    lag(o.market_prob) over w as prev_market_prob
+  from odds_snapshots o
+  window w as (partition by o.race_id order by o.captured_at, o.id)
+) t
+where rn = 1
+   or prev_overround   is distinct from overround
+   or prev_market_prob is distinct from market_prob;
+
 -- ------------------------------------------------------------------- 公開制御
 -- Supabaseはanonキーがブラウザに露出するため、RLSを有効にして
 -- 「結果が確定した過去レースだけ読める」状態にする。書き込みは
