@@ -38,9 +38,17 @@ def fetch(path: str, params: dict = None) -> bytes:
     if cache_path and cache_path.exists():
         return cache_path.read_bytes()
 
-    resp = get_session().get(BASE_URL + path, params=params, timeout=15)
-    resp.raise_for_status()
-    time.sleep(SLEEP_SEC)
+    # 間隔は finally で置く。raise_for_status やタイムアウトの後ろに書くと、
+    # 呼び出し側が例外を握って次に進む経路（backtest.collect の
+    # except Exception など）で待ち時間がまるごと消える。サイトが5xxを
+    # 返している間は全リクエストが失敗するので、相手が弱っているときに
+    # 待ち時間ゼロで連射することになる。一番叩いてはいけない状況で
+    # 一番強く叩く形なので、成功しても失敗しても必ず待つ。
+    try:
+        resp = get_session().get(BASE_URL + path, params=params, timeout=15)
+        resp.raise_for_status()
+    finally:
+        time.sleep(SLEEP_SEC)
 
     if cache_path:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
