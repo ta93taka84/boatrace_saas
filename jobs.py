@@ -89,6 +89,22 @@ def _race_slot(data: dict, venue: dict, race_no: int) -> dict:
 
 _SCHEDULE_CACHE: dict = {}
 
+# 開催場が0場になったときの説明。
+#
+# ボートレースに開催0の日は無い。だから0場は「今日は何も無い」ではなく
+# 「get_active_venues が静かに空を返した」と読むべきで、事実上
+# パーサーが壊れたことの同義語になる。get_active_venues は
+# トップページの jcd= リンクを拾い、取れなければ月間スケジュールに
+# フォールバックするが、どちらもリンク構造が変わると例外を出さずに
+# 空を返す。検査を置かないと、全ジョブが「0レース取得完了」と印字して
+# 正常終了し、失敗時にしか飛ばない通知も鳴らないまま、その日の収集が
+# まるごと失われる。
+NO_VENUE_HINT = (
+    "開催場が0場。ボートレースに開催0の日は無いので、"
+    "get_active_venues が静かに空を返している可能性が高い。"
+    "トップページのリンク構造か月間スケジュールの体裁を確認すること"
+)
+
 
 def _close_schedule(date_str: str) -> list:
     """
@@ -99,9 +115,15 @@ def _close_schedule(date_str: str) -> list:
     1パスごとにそのまま無駄になる（ランナーからは1リクエスト約12秒）。
     """
     if date_str not in _SCHEDULE_CACHE:
-        _SCHEDULE_CACHE[date_str] = [
+        schedule = [
             (v, get_close_times(date_str, v["code"])) for v in get_active_venues(date_str)
         ]
+        if not schedule:
+            # 空はキャッシュしない。一度の失敗を覚えると、その日の残りの
+            # パスが全部それを使い回して空のまま回り続け、サイト側が
+            # 直っても復帰できなくなる。
+            return []
+        _SCHEDULE_CACHE[date_str] = schedule
     return _SCHEDULE_CACHE[date_str]
 
 
@@ -110,6 +132,9 @@ def morning(date_str: str = None):
     date_str = date_str or _today()
     data = _load(date_str)
     venues = get_active_venues(date_str)
+    if not venues:
+        print(f"[異常] {date_str}: {NO_VENUE_HINT}")
+        sys.exit(1)
     print(f"[{date_str}] {len(venues)}場")
 
     count = 0
@@ -142,8 +167,18 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
     now = datetime.now()
     deadline = now + timedelta(minutes=window_min)
 
+    # 0場と「締切が近いレースが0」は別物。後者は正常（時間帯によっては
+    # 対象が無い）だが、前者は異常なので、targets が空になる前に切り分ける。
+    schedule = _close_schedule(date_str)
+    if not schedule:
+        problem = f"{date_str}: {NO_VENUE_HINT}"
+        print(f"[異常] {problem}")
+        if strict:
+            sys.exit(1)
+        return [problem]
+
     targets = []
-    for venue, times in _close_schedule(date_str):
+    for venue, times in schedule:
         for rno, hhmm in times.items():
             close_at = datetime.combine(now.date(), datetime.strptime(hhmm, "%H:%M").time())
             if now <= close_at <= deadline:
@@ -381,6 +416,9 @@ def results(date_str: str = None):
     date_str = date_str or _target_result_date()
     data = _load(date_str)
     venues = get_active_venues(date_str)
+    if not venues:
+        print(f"[異常] {date_str}: {NO_VENUE_HINT}")
+        sys.exit(1)
 
     count = 0
     for venue in venues:
