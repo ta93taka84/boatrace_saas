@@ -73,9 +73,8 @@ export default async function StatsPage() {
       </p>
 
       <div className="notice">
-        {races}レースは傾向を見るには少ない標本です。割合の標準誤差は概ね ±
-        {(se(0.5, races) * 100).toFixed(1)}pt あり、この幅に収まる差は
-        偶然と区別できません。数字は幅を持って読んでください。
+        標本は{races}レース。割合の標準誤差は概ね ±
+        {(se(0.5, races) * 100).toFixed(1)}pt で、この幅の差は偶然と区別できません。
       </div>
 
       <div className="grid2">
@@ -138,8 +137,7 @@ export default async function StatsPage() {
             </table>
           </div>
           <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 10 }}>
-            差が標準誤差の2倍を超えたものだけ濃く表示しています。
-            薄い行は目安どおりと考えて差し支えありません。
+            差が標準誤差の2倍を超えた行だけ濃く表示しています。
           </p>
         </div>
       </div>
@@ -204,10 +202,9 @@ export default async function StatsPage() {
             ))}
           </div>
           <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 14 }}>
-            半数のレースは約{Math.round(payout.median / 100)}倍以下の配当です。
-            一方で{(payout.bigShare * 100).toFixed(0)}%のレースは100倍を超えます。
-            平均は高額配当に引っ張られるため、中央値で見るのが実態に近くなります。
-            なお控除率25%があるため、長期的には賭けた額の75%が戻る計算です。
+            半数は約{Math.round(payout.median / 100)}倍以下、
+            {(payout.bigShare * 100).toFixed(0)}%が100倍超。平均は高額配当に
+            引っ張られるため、中央値のほうが実態に近くなります。
           </p>
         </div>
       )}
@@ -244,8 +241,7 @@ export default async function StatsPage() {
         {thin.length > 0 && (
           <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 12 }}>
             {thin.length}場は標本が{RELIABLE}レース未満のため表示していません。
-            1場十数レースの1コース1着率は偶然で0.2〜0.7の範囲に散らばるため、
-            場の個性として読むと確実に誤ります。
+            十数レースの1コース1着率は偶然で0.2〜0.7に散らばります。
           </p>
         )}
       </div>

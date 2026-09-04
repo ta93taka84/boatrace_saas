@@ -102,7 +102,7 @@ export default async function RacePage({
 
       <div className="grid2">
         <div className="card">
-          <h3>市場勝率（三連単オッズからの逆算）</h3>
+          <h3>市場勝率</h3>
           <ProbBars
             values={marketValues}
             max={1}
@@ -117,16 +117,14 @@ export default async function RacePage({
             format={(v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}pt`}
           />
           <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 10 }}>
-            右（青）は全国平均より市場が高く評価している艇、左（橙）は低く評価して
-            いる艇。1号艇が左に振れているレースは、標準どおりの決着になりにくいと
-            市場が見ている。
+            右が全国平均より高い評価、左が低い評価。
           </p>
         </div>
       </div>
 
       {exhibitPresent.length > 0 && (
         <div className="card">
-          <h3>展示タイム（左ほど速い）</h3>
+          <h3>展示タイム</h3>
           <DotPlot
             values={exhibit}
             lowerIsBetter

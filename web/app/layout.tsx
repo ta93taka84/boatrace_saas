@@ -12,7 +12,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ボートレース データビュー",
-  description: "全場のレースデータを集約して比較する",
+  description: "ボートレース24場の出走表・オッズ・結果。",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -24,7 +24,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/" className="site-logo">
               ボートレース データビュー
             </Link>
-            <span className="site-note">全場のレースデータを集約して比較する</span>
           </div>
         </header>
         <SiteNav />

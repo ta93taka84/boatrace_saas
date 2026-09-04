@@ -49,15 +49,8 @@ export default async function Home({
   if (!day) {
     return (
       <main className="wrap">
-        <h1>ボートレース データビュー</h1>
-        <p className="sub">まだデータがありません。</p>
-        <div className="card">
-          <p style={{ marginTop: 0 }}>収集ジョブを実行するとここに表示されます。</p>
-          <pre className="scroll-x inset">
-{`py -3 jobs.py morning
-py -3 jobs.py prerace --window 40`}
-          </pre>
-        </div>
+        <h1>レース一覧</h1>
+        <p className="sub">表示できるデータがありません。</p>
       </main>
     );
   }
@@ -84,9 +77,8 @@ py -3 jobs.py prerace --window 40`}
       <DateNav dates={dates} current={day.date} />
 
       <div className="notice">
-        「市場勝率」は三連単オッズから逆算した値です。予測モデルは現時点で
-        市場オッズを上回っておらず、期待値は表示していません。
-        詳しくは<Link href="/about">データについて</Link>。
+        市場勝率は三連単オッズから逆算した値です。予測モデルは市場オッズに
+        届いていないため、期待値は出していません（<Link href="/about">詳細</Link>）。
       </div>
 
       <div className="venue-grid">
