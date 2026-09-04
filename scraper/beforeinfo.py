@@ -127,10 +127,16 @@ def _parse_weather(soup) -> dict:
         if "is-weather" in classes:
             result["weather"] = text or None
         elif "is-direction" in classes:
-            result["temperature"] = _float(text)
+            # 気温と水温は符号付きで読む。既定の正規表現はマイナスを拾わないので、
+            # 氷点下の日に -1.0℃ が +1.0 になる。冬季の桐生・戸田・びわこで
+            # 実際に起きうる。例外も出ず値域の検査も無いので静かに通る。
+            # 表示は「気温 28.0℃」の形で他にハイフンが無いため、符号付きにしても
+            # 別の数字を拾う心配はない。
+            result["temperature"] = _float(text, signed=True)
         elif "is-waterTemperature" in classes:
-            result["water_temp"] = _float(text)
+            result["water_temp"] = _float(text, signed=True)
         elif "is-wind" in classes:
+            # 風速と波高は定義上負にならないので符号なしのまま
             result["wind_speed"] = _float(text)
         elif "is-wave" in classes:
             result["wave_height"] = _float(text)
