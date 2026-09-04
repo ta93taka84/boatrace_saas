@@ -25,7 +25,51 @@ def get_beforeinfo(date_str: str, venue_code: str, race_no: int) -> dict | None:
     if not racers:
         return None
 
-    return {"race_no": race_no, **_parse_weather(soup), "racers": racers}
+    return {
+        "race_no": race_no,
+        **_parse_weather(soup),
+        "racers": racers,
+        "start_exhibition": _parse_start_exhibition(soup),
+    }
+
+
+def _parse_start_exhibition(soup) -> list[dict]:
+    """
+    スタート展示。進入コース順に艇番と展示STが並ぶ。
+
+    戻り値: [{"course": 1, "lane": 1, "st": 0.02, "early": False}, ...]
+    展示前はまだ出ていないので空リストになる。
+
+    **これは締切前に分かる。** 本番の進入コースはレースが終わるまで
+    分からないが、展示の進入はここで読める。scoring の actual_course に
+    渡せる唯一の事前情報がこれになる。
+
+    **本番のスタート（result.get_result の "start"）とは別物。** 混同しないこと。
+    同じ .table1_boatImage1 というクラスで描かれているが、キャッシュ実測で
+    前づけ率は本番18.1%に対して展示13.1%、早出しは本番24件に対して
+    展示1,318件と、桁が違う。展示では早く出ても罰則が無いので、
+    F は失格ではなく「大時計より早く出た」という情報でしかない。
+    そのため flying ではなく early という名前にしている。
+
+    STは大時計が0になってから何秒後か。早出しは0より前なので負で返す。
+    """
+    exhibition = []
+    for course, div in enumerate(soup.select(".table1_boatImage1"), 1):
+        m = re.match(r"^(\d)\s+(F?)\.(\d+)", div.get_text(" ", strip=True))
+        if not m:
+            continue
+        lane = int(m.group(1))
+        if not 1 <= lane <= 6:
+            continue
+        early = m.group(2) == "F"
+        st = float("0." + m.group(3))
+        exhibition.append({
+            "course": course,
+            "lane": lane,
+            "st": round(-st if early else st, 2),
+            "early": early,
+        })
+    return exhibition
 
 
 def _parse_racers(soup) -> list[dict]:
