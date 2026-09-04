@@ -57,6 +57,14 @@ export default async function StatsPage() {
   const span =
     dates.length > 1 ? `${dates[0]}〜${dates[dates.length - 1]}` : dates[0];
 
+  // 棒は最大値ではなく「切りのよい上限」でスケールする。最大値に合わせると
+  // 1コースの棒が必ず満杯になり、「1コース＝100%」と読まれてしまう。実際は約55%。
+  // かといって上限を1にすると6コース(約2.5%)の棒が見えなくなるので、
+  // 観測最大を0.1単位で切り上げた値を使う。ゼロ基点なので棒の長さは
+  // 1着率に比例したままで、上限は ProbBars が軸として画面に書く。
+  const courseBarMax =
+    Math.ceil(Math.max(...courseWinRate.map((c) => c.rate)) * 10) / 10 || 1;
+
   // サンプルが少ない場ほど数字が振れる。判断を誤らせないよう閾値を持つ。
   const RELIABLE = 60;
   const reliable = byVenue.filter((v) => v.races >= RELIABLE);
@@ -86,9 +94,13 @@ export default async function StatsPage() {
               value: c.rate,
               label: `${(c.rate * 100).toFixed(1)}%`,
             }))}
-            max={Math.max(...courseWinRate.map((c) => c.rate))}
+            max={courseBarMax}
             format={(v) => `${(v * 100).toFixed(1)}%`}
           />
+          <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 10 }}>
+            棒の長さは1着率そのものです（棒の右端＝
+            {(courseBarMax * 100).toFixed(0)}%）。100%ではありません。
+          </p>
         </div>
 
         <div className="card">

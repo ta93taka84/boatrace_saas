@@ -264,7 +264,9 @@ export default async function RacePage({
             format={(v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}pt`}
           />
           <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 10 }}>
-            右が全国平均より高い評価、左が低い評価。
+            右が全国平均より高い評価、左が低い評価。尺度はレースによらず
+            ±30pt に固定しているので、棒の長さはそのままレース間で比べられます。
+            棒の半分が ±15pt です。
           </p>
         </div>
       </div>
