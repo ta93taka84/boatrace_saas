@@ -71,6 +71,36 @@ export default async function RacePage({
 
   const cond = race.conditions;
 
+  // 列ごとの最良値。10列の数字が均一に並ぶと、どこを見ればよいか手がかりが無い。
+  // 該当セルだけ太字にする（色は足さない。すでに艇色と系列色があるため）。
+  const best = (
+    pick: (r: (typeof racers)[number]) => number | null | undefined,
+    lowerIsBetter = false
+  ) => {
+    const vals = racers.map(pick).filter((v): v is number => v != null && v > 0);
+    if (vals.length === 0) return null;
+    return lowerIsBetter ? Math.min(...vals) : Math.max(...vals);
+  };
+  const bestWinAll = best((r) => r.win_rate_all);
+  const bestWinVenue = best((r) => r.win_rate_venue);
+  const bestSt = best((r) => r.avg_st, true);
+  const bestMotor = best((r) => r.motor_in2_rate);
+  const bestBoat = best((r) => r.boat_in2_rate);
+  const bestExhibit = best((r) => r.exhibit_time, true);
+
+  // 展示タイムが1つも無い日は列ごと出さない。「—」が6個並ぶと壊れて見える。
+  const hasExhibit = exhibitPresent.length > 0;
+
+  // 着順は {艇番: 着順} で入っている。表示は着順の順に並べ替える。
+  const cell = (isBest: boolean) => (isBest ? "num best" : "num");
+
+  const finishOrder = race.result
+    ? Object.entries(race.result.finish ?? {})
+        .map(([lane, pos]) => ({ lane: Number(lane), pos: Number(pos) }))
+        .filter((x) => x.pos >= 1 && x.pos <= 3)
+        .sort((a, b) => a.pos - b.pos)
+    : [];
+
   return (
     <main className="wrap">
       <p className="crumb">
@@ -82,8 +112,8 @@ export default async function RacePage({
       <p className="sub">
         {shown}
         {race.closes_at && ` ・ 締切 ${race.closes_at}`}
-        {race.overround && (
-          <span className="muted"> ・ 控除前オッズ総和 {race.overround.toFixed(3)}</span>
+        {race.odds_at && (
+          <span className="muted"> ・ オッズ {race.odds_at} 時点</span>
         )}
       </p>
 
@@ -99,6 +129,105 @@ export default async function RacePage({
           </div>
         </div>
       )}
+
+      {race.result && (
+        <div className="card">
+          <h3>結果</h3>
+          <p style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 14 }}>
+            {finishOrder.map(({ lane, pos }) => (
+              <span
+                key={lane}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+              >
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {pos}着
+                </span>
+                <LaneBadge lane={lane} />
+              </span>
+            ))}
+            {race.result.kimarite && (
+              <span className="muted">決まり手 {race.result.kimarite}</span>
+            )}
+          </p>
+          {race.result.payouts?.["3連単"] && (
+            <p className="num" style={{ marginBottom: 0 }}>
+              3連単 {race.result.payouts["3連単"].combo} ¥
+              {race.result.payouts["3連単"].payout.toLocaleString()}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="card">
+        <h3>出走表</h3>
+        <div className="scroll-x">
+          <table>
+            <thead>
+              <tr>
+                <th className="l">艇</th>
+                <th className="l">選手</th>
+                <th>級別</th>
+                <th>全国勝率</th>
+                <th>当地勝率</th>
+                <th>平均ST</th>
+                <th>F/L</th>
+                <th>モーター</th>
+                <th>ボート</th>
+                {hasExhibit && <th>展示</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {LANES.map((lane) => {
+                const r = byLane.get(lane);
+                if (!r) {
+                  return (
+                    <tr key={lane} className={`lane-${lane}`}>
+                      <td className="l"><LaneBadge lane={lane} /></td>
+                      <td className="l muted" colSpan={hasExhibit ? 9 : 8}>未取得</td>
+                    </tr>
+                  );
+                }
+                return (
+                  <tr key={lane} className={`lane-${lane}`}>
+                    <td className="l"><LaneBadge lane={lane} /></td>
+                    <td className="l">
+                      {r.name}
+                      <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>
+                        {r.branch} {r.age}歳
+                      </span>
+                    </td>
+                    <td>{r.class}</td>
+                    <td className={cell(r.win_rate_all === bestWinAll)}>
+                      {r.win_rate_all.toFixed(2)}
+                    </td>
+                    <td className={cell(r.win_rate_venue === bestWinVenue)}>
+                      {r.win_rate_venue > 0 ? r.win_rate_venue.toFixed(2) : "—"}
+                    </td>
+                    <td className={cell(r.avg_st === bestSt)}>
+                      {r.avg_st > 0 ? r.avg_st.toFixed(2) : "—"}
+                    </td>
+                    <td className="num">
+                      {r.f_count}/{r.l_count}
+                    </td>
+                    <td className={cell(r.motor_in2_rate === bestMotor)}>
+                      {r.motor_no}
+                      <span className="muted"> ({r.motor_in2_rate.toFixed(1)}%)</span>
+                    </td>
+                    <td className={cell(r.boat_in2_rate === bestBoat)}>
+                      {r.boat_no}
+                      <span className="muted"> ({r.boat_in2_rate.toFixed(1)}%)</span>
+                    </td>
+                    {hasExhibit && (
+                      <td className={cell(r.exhibit_time === bestExhibit)}>
+                        {r.exhibit_time ? r.exhibit_time.toFixed(2) : "—"}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="grid2">
         <div className="card">
@@ -134,89 +263,6 @@ export default async function RacePage({
         </div>
       )}
 
-      <div className="card">
-        <h3>出走表</h3>
-        <div className="scroll-x">
-          <table>
-            <thead>
-              <tr>
-                <th className="l">艇</th>
-                <th className="l">選手</th>
-                <th>級別</th>
-                <th>全国勝率</th>
-                <th>当地勝率</th>
-                <th>平均ST</th>
-                <th>F/L</th>
-                <th>モーター</th>
-                <th>ボート</th>
-                <th>展示</th>
-              </tr>
-            </thead>
-            <tbody>
-              {LANES.map((lane) => {
-                const r = byLane.get(lane);
-                if (!r) {
-                  return (
-                    <tr key={lane} className={`lane-${lane}`}>
-                      <td className="l"><LaneBadge lane={lane} /></td>
-                      <td className="l muted" colSpan={9}>未取得</td>
-                    </tr>
-                  );
-                }
-                return (
-                  <tr key={lane} className={`lane-${lane}`}>
-                    <td className="l"><LaneBadge lane={lane} /></td>
-                    <td className="l">
-                      {r.name}
-                      <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>
-                        {r.branch} {r.age}歳
-                      </span>
-                    </td>
-                    <td>{r.class}</td>
-                    <td className="num">{r.win_rate_all.toFixed(2)}</td>
-                    <td className="num">
-                      {r.win_rate_venue > 0 ? r.win_rate_venue.toFixed(2) : "—"}
-                    </td>
-                    <td className="num">{r.avg_st > 0 ? r.avg_st.toFixed(2) : "—"}</td>
-                    <td className="num">
-                      {r.f_count}/{r.l_count}
-                    </td>
-                    <td className="num">
-                      {r.motor_no}
-                      <span className="muted"> ({r.motor_in2_rate.toFixed(1)}%)</span>
-                    </td>
-                    <td className="num">
-                      {r.boat_no}
-                      <span className="muted"> ({r.boat_in2_rate.toFixed(1)}%)</span>
-                    </td>
-                    <td className="num">
-                      {r.exhibit_time ? r.exhibit_time.toFixed(2) : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {race.result && (
-        <div className="card">
-          <h3>結果</h3>
-          <p style={{ marginTop: 0 }}>
-            1着 <LaneBadge lane={race.result.winner_lane ?? 0} />{" "}
-            {race.result.kimarite && (
-              <span className="muted">決まり手 {race.result.kimarite}</span>
-            )}
-          </p>
-          {race.result.payouts?.["3連単"] && (
-            <p className="num" style={{ marginBottom: 0 }}>
-              3連単 {race.result.payouts["3連単"].combo} ¥
-              {race.result.payouts["3連単"].payout.toLocaleString()}
-            </p>
-          )}
-        </div>
-      )}
     </main>
   );
 }

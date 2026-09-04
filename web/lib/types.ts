@@ -50,6 +50,8 @@ export interface Race {
   conditions?: Conditions;
   market_prob?: Record<string, number>;
   overround?: number;
+  /** 表示中のオッズを取得した時刻（HH:MM）。オッズは締切に向けて動くため鮮度が要る。 */
+  odds_at?: string;
   model_prob?: Record<string, number>;
   ev?: Record<string, number>;
   top_lane?: number;

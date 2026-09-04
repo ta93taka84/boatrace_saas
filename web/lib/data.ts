@@ -41,7 +41,7 @@ export async function getDay(date: string): Promise<DayData | null> {
   const { data, error } = await db
     .from("races")
     .select(
-      `race_no, race_date, venue_code,
+      `race_no, race_date, venue_code, closes_at,
        venues ( name ),
        race_entries ( * ),
        race_results ( winner_lane, finish, kimarite, payouts ),
@@ -106,6 +106,9 @@ function toRace(row: any): Race {
     racers: (row.race_entries ?? []).sort((a: any, b: any) => a.lane - b.lane),
   };
 
+  // DBは time 型なので "11:29:00" で返る。表示に使うのは時分だけ。
+  if (row.closes_at) race.closes_at = String(row.closes_at).slice(0, 5);
+
   if (row.weather || row.wind_speed != null) {
     race.conditions = {
       weather: row.weather ?? null,
@@ -120,6 +123,13 @@ function toRace(row: any): Race {
   if (latest) {
     race.market_prob = latest.market_prob ?? undefined;
     race.overround = latest.overround ?? undefined;
+    if (latest.captured_at) {
+      race.odds_at = new Date(latest.captured_at).toLocaleTimeString("ja-JP", {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Asia/Tokyo",
+      });
+    }
   }
 
   // 未較正の予測はRLSで返らない想定だが、念のため画面側でも出さない。

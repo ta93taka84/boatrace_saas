@@ -152,10 +152,12 @@ def _upsert_race(cur, race_date, venue_code, race) -> int:
     cond = race.get("conditions") or {}
     cur.execute(
         """
-        insert into races (race_date, venue_code, race_no, weather, temperature,
-                           water_temp, wind_speed, wind_dir_code, wave_height)
-        values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        insert into races (race_date, venue_code, race_no, closes_at, weather,
+                           temperature, water_temp, wind_speed, wind_dir_code,
+                           wave_height)
+        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (race_date, venue_code, race_no) do update set
+          closes_at     = coalesce(excluded.closes_at,     races.closes_at),
           weather       = coalesce(excluded.weather,       races.weather),
           temperature   = coalesce(excluded.temperature,   races.temperature),
           water_temp    = coalesce(excluded.water_temp,    races.water_temp),
@@ -165,9 +167,9 @@ def _upsert_race(cur, race_date, venue_code, race) -> int:
           fetched_at    = now()
         returning id
         """,
-        (race_date, venue_code, race["race_no"], cond.get("weather"),
-         cond.get("temperature"), cond.get("water_temp"), cond.get("wind_speed"),
-         cond.get("wind_dir_code"), cond.get("wave_height")),
+        (race_date, venue_code, race["race_no"], race.get("closes_at"),
+         cond.get("weather"), cond.get("temperature"), cond.get("water_temp"),
+         cond.get("wind_speed"), cond.get("wind_dir_code"), cond.get("wave_height")),
     )
     return cur.fetchone()[0]
 

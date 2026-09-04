@@ -34,6 +34,9 @@ create table if not exists races (
   venue_code     text not null references venues(code),
   race_no        smallint not null check (race_no between 1 and 12),
 
+  -- 投票締切。朝の出走表取得時点で分かる。締切順の一覧に使う。
+  closes_at      time,
+
   -- 直前情報の気象。展示前はNULL。
   weather        text,
   temperature    numeric(4,1),

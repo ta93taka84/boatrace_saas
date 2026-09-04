@@ -57,18 +57,32 @@ export default async function Home({
 
   const shown = `${day.date.slice(0, 4)}-${day.date.slice(4, 6)}-${day.date.slice(6, 8)}`;
   const totalRaces = day.venues.reduce((n, v) => n + v.races.length, 0);
-  const withOdds = day.venues.reduce(
-    (n, v) => n + v.races.filter((r) => r.market_prob).length,
-    0
-  );
+  // 「まもなく締切」は当日を見ているときだけ意味がある。
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" })
+    .replace(/-/g, "");
+  const nowHM = new Date().toLocaleTimeString("ja-JP", {
+    hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tokyo",
+  });
+  const upcoming =
+    day.date === today
+      ? day.venues
+          .flatMap((v) =>
+            v.races
+              .filter((r) => r.closes_at && r.closes_at >= nowHM && !r.result)
+              .map((r) => ({ venue: v, race: r }))
+          )
+          .sort((a, b) => (a.race.closes_at! < b.race.closes_at! ? -1 : 1))
+          .slice(0, 12)
+      : [];
 
   return (
     <main className="wrap">
       <p className="crumb">レース一覧</p>
       <h1>{shown} のレース</h1>
       <p className="sub">
+        公式サイトの出走表・オッズ・結果を毎日集めて、レースごとにまとめています。
+        <br />
         {day.venues.length}場 {totalRaces}レース
-        <span className="muted"> ・ オッズ取得済み {withOdds}</span>
         {day.updated_at && (
           <span className="muted"> ・ 更新 {day.updated_at.slice(11, 16)}</span>
         )}
@@ -81,6 +95,57 @@ export default async function Home({
         届いていないため、期待値は出していません（<Link href="/about">詳細</Link>）。
       </div>
 
+      {upcoming.length > 0 && (
+        <div className="card">
+          <h3>まもなく締切</h3>
+          <div className="scroll-x">
+            <table className="upcoming">
+              <thead>
+                <tr>
+                  <th>締切</th>
+                  <th className="l">場</th>
+                  <th>レース</th>
+                  <th>市場本命</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map(({ venue, race }) => {
+                  const top = marketTop(race);
+                  return (
+                    <tr key={`${venue.code}-${race.race_no}`}>
+                      <td className="time num">{race.closes_at}</td>
+                      <td className="venue">{venue.name}</td>
+                      <td>
+                        <Link href={`/race/${day.date}/${venue.code}/${race.race_no}`}>
+                          {race.race_no}R
+                        </Link>
+                      </td>
+                      <td>
+                        {top ? (
+                          <span
+                            style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+                          >
+                            <LaneBadge lane={top.lane} size={16} />
+                            <span className="num">{(top.prob * 100).toFixed(0)}%</span>
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <p className="legend">
+        <LaneBadge lane={1} size={14} />
+        は確定した1着艇です。結果が出ていないレースには付きません。
+      </p>
+
       <div className="venue-grid">
         {day.venues.map((venue) => (
           <div className="card" key={venue.code} style={{ marginBottom: 0 }}>
@@ -91,8 +156,9 @@ export default async function Home({
             </p>
             <div className="race-links">
               {venue.races.map((race) => {
-                const top = marketTop(race);
                 const winner = race.result?.winner_lane ?? null;
+                // チップは確定した1着だけに使う。予想と結果を同じ形で出すと、
+                // 締切前のレースで予想を結果として読まれる。
                 return (
                   <Link
                     key={race.race_no}
@@ -100,25 +166,13 @@ export default async function Home({
                     title={
                       winner
                         ? `${race.race_no}R 確定1着 ${winner}号艇`
-                        : top
-                        ? `${race.race_no}R 市場本命 ${top.lane}号艇 ${(top.prob * 100).toFixed(0)}%`
+                        : race.closes_at
+                        ? `${race.race_no}R 締切 ${race.closes_at}`
                         : `${race.race_no}R`
                     }
-                    // 確定した1着と、まだ確定していない市場本命は
-                    // 同じバッジで出ると区別がつかないため枠線で分ける。
-                    style={winner ? { borderColor: "var(--good)" } : undefined}
                   >
-                    <span
-                      style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
-                    >
-                      {race.race_no}R
-                      {/* 結果が出ていれば1着艇、まだなら市場本命を出す */}
-                      {winner ? (
-                        <LaneBadge lane={winner} size={14} />
-                      ) : top ? (
-                        <LaneBadge lane={top.lane} size={14} />
-                      ) : null}
-                    </span>
+                    {race.race_no}R
+                    {winner && <LaneBadge lane={winner} size={14} />}
                   </Link>
                 );
               })}
