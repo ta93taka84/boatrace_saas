@@ -28,7 +28,7 @@ from scraper.racelist import get_racelist
 from scraper.odds import get_odds
 from scraper.beforeinfo import get_beforeinfo
 from scraper.result import get_result
-from scraper.scoring import estimate_win_prob, course_rates, COURSE_BASE_WIN_RATE
+from scraper.scoring import estimate_win_prob, COURSE_BASE_WIN_RATE
 
 DATASET = Path("output/backtest.jsonl")
 RACE_COUNT = 12
@@ -113,29 +113,52 @@ def evaluate(start: str = None, end: str = None):
         print("データがありません。先に collect を実行してください。")
         return
 
-    print(f"評価対象: {len(rows)}レース\n")
+    train, test = _split_by_date(rows)
+    if not test:
+        print(f"{len(rows)}レースは1日分しかなく、学習と検証に分けられません。")
+        print("collect で日数を増やしてから評価してください。")
+        return
+
+    # 基準率は学習側だけから推定する。
+    #
+    # calibrate が書く course_rates.json は全データの勝者から作られる。
+    # それを使って同じデータを採点すると、自分で作った答えで答え合わせを
+    # することになり、「較正後に再評価すると良くなる」のはその自己成就を
+    # かなり含む。CLAUDE.md の「判断は必ず分割で行う」はこのため。
+    table = _fit_course_rates(train)
+
+    def rates_of(r):
+        return _rates_for(table, r["venue"])
+
+    print(f"全{len(rows)}レース (学習{len(train)} / 検証{len(test)})")
+    print(f"採点するのは検証側の{len(test)}レースだけ。基準率は学習側から推定した。\n")
 
     predictors = {
         "コース基準のみ": lambda r: _normalize(
-            {x["lane"]: course_rates(r["venue"]).get(x["lane"], 0.05) for x in r["racers"]}
+            {x["lane"]: rates_of(r).get(x["lane"], 0.05) for x in r["racers"]}
         ),
         "モデル(現行)": lambda r: estimate_win_prob(
-            r["racers"], r["venue"], r.get("conditions")),
+            r["racers"], r["venue"], r.get("conditions"), base_rates=rates_of(r)),
         "市場オッズ": lambda r: {int(k): v for k, v in r["market_prob"].items()},
     }
 
     print(f"{'予測器':<16} {'LogLoss':>9} {'Brier':>9} {'的中率':>8}")
     print("-" * 46)
-    scored = {}
     for name, fn in predictors.items():
-        ll, brier, hit = _score(rows, fn)
-        scored[name] = fn
+        ll, brier, hit = _score(test, fn)
         print(f"{name:<16} {ll:>9.4f} {brier:>9.4f} {hit:>7.1%}")
 
-    print("\n(LogLoss・Brierは小さいほど良い。市場オッズに勝てなければ賭ける根拠はない)\n")
+    print("\n(LogLoss・Brierは小さいほど良い。市場オッズに勝てなければ賭ける根拠はない)")
+    print("(的中率は「1号艇を常に選ぶ」だけで約50%出る。これで判断しないこと)")
+    print()
+    print("[注意] 基準率の漏れは塞いだが、モデルの数字はまだ楽観側に寄っている。")
+    print("       scoring.py の LOGIT_WEIGHTS は全データで当てはめた係数なので、")
+    print("       検証側にもその情報が入っている。候補の採否は experiment.py の")
+    print("       対応のある比較で判断すること。ここは配備前の健全性確認に使う。")
+    print()
 
-    _calibration_table(rows, predictors["モデル(現行)"], "モデル(現行)")
-    _calibration_table(rows, predictors["市場オッズ"], "市場オッズ")
+    _calibration_table(test, predictors["モデル(現行)"], "モデル(現行)")
+    _calibration_table(test, predictors["市場オッズ"], "市場オッズ")
     _course_actuals(rows)
 
 
@@ -154,6 +177,21 @@ def _load(start, end):
             continue
         rows.append(r)
     return rows
+
+
+def _split_by_date(rows):
+    """
+    日付で前半(学習)と後半(検証)に分ける。experiment.py の split_by_date と同じ
+    切り方にしてある。レース単位で無作為に分けると、同じ日・同じ節の情報が
+    両側に跨がって漏れるため、切れ目は必ず日付に置く。
+    """
+    dates = sorted({r["date"] for r in rows})
+    if len(dates) < 2:
+        return rows, []
+    cut = dates[len(dates) // 2]
+    train = [r for r in rows if r["date"] < cut]
+    test = [r for r in rows if r["date"] >= cut]
+    return train, test
 
 
 def _score(rows, predict):
@@ -237,13 +275,14 @@ def _normalize(d):
 SHRINKAGE_K = 80
 
 
-def calibrate(start: str = None, end: str = None):
-    """実測から場別コース勝率を推定し scraper/course_rates.json に書き出す。"""
-    rows = _load(start, end)
-    if not rows:
-        print("データがありません。先に collect を実行してください。")
-        return
+def _fit_course_rates(rows) -> dict:
+    """
+    渡された行だけから場別コース勝率を推定する。戻り値は course_rates.json と
+    同じ形（global と venues）。
 
+    評価から呼ぶときは学習側だけを渡すこと。全データを渡して同じデータを
+    採点すると in-sample になる。
+    """
     global_counts = {lane: [0, 0] for lane in range(1, 7)}
     venue_counts = {}
     for r in rows:
@@ -254,10 +293,9 @@ def calibrate(start: str = None, end: str = None):
         global_counts[r["winner_lane"]][1] += 1
         v[r["winner_lane"]][1] += 1
 
-    global_rate = {
-        lane: (w / n if n else 0.0) for lane, (n, w) in global_counts.items()
-    }
-    global_rate = _normalize(global_rate)
+    global_rate = _normalize(
+        {lane: (w / n if n else 0.0) for lane, (n, w) in global_counts.items()}
+    )
 
     venues = {}
     for code, counts in venue_counts.items():
@@ -267,12 +305,39 @@ def calibrate(start: str = None, end: str = None):
             raw[lane] = (w + SHRINKAGE_K * prior) / (n + SHRINKAGE_K)
         venues[code] = {str(k): round(v, 4) for k, v in _normalize(raw).items()}
 
+    return {
+        "global": {str(k): round(v, 4) for k, v in global_rate.items()},
+        "venues": venues,
+    }
+
+
+def _rates_for(table: dict, venue_code: str | None) -> dict[int, float]:
+    """_fit_course_rates の出力から、その場で使う {コース: 1着率} を取り出す。"""
+    t = (table.get("venues") or {}).get(venue_code) or table.get("global")
+    if not t:
+        return COURSE_BASE_WIN_RATE
+    return {int(k): float(v) for k, v in t.items()}
+
+
+def calibrate(start: str = None, end: str = None):
+    """
+    実測から場別コース勝率を推定し scraper/course_rates.json に書き出す。
+
+    これは配備用。全データで取り直すのが正しい。優劣の判断に使ってはならず、
+    判断は evaluate の分割（さらに採否は experiment.py）で行う。
+    """
+    rows = _load(start, end)
+    if not rows:
+        print("データがありません。先に collect を実行してください。")
+        return
+
+    fitted = _fit_course_rates(rows)
+
     out = {
         "generated_at": datetime.now().isoformat(),
         "races": len(rows),
         "shrinkage_k": SHRINKAGE_K,
-        "global": {str(k): round(v, 4) for k, v in global_rate.items()},
-        "venues": venues,
+        **fitted,
     }
     path = Path("scraper/course_rates.json")
     path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -172,8 +172,16 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
 
 
 def estimate_win_prob(racers: list[dict], venue_code: str | None = None,
-                      conditions: dict | None = None) -> dict[int, float]:
-    """コース別1着率を土台に、レース内で中心化した特徴量の重み付き和で補正する。"""
+                      conditions: dict | None = None,
+                      base_rates: dict[int, float] | None = None) -> dict[int, float]:
+    """
+    コース別1着率を土台に、レース内で中心化した特徴量の重み付き和で補正する。
+
+    base_rates を渡すと course_rates() の代わりにそれを使う。検証で使うため。
+    course_rates() が読む course_rates.json は全データから作られるので、
+    それを検証側の採点に使うと、答えを見て作った基準で答え合わせをすることになる。
+    分割して評価する側が、学習側だけで推定した基準率をここに渡す。
+    """
     if not racers:
         return {}
 
@@ -193,7 +201,8 @@ def estimate_win_prob(racers: list[dict], venue_code: str | None = None,
             values = [v if v else mean for v in values]
         deviations[name] = [v - mean for v in values]
 
-    base_rates = course_rates(venue_code)
+    if base_rates is None:
+        base_rates = course_rates(venue_code)
     utilities = []
     for i, r in enumerate(racers):
         base = max(base_rates.get(course_of(r), 0.05), 1e-6)
