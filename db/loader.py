@@ -83,15 +83,17 @@ def load_pipeline_output(path: Path):
     race_date = _to_date(data["date"])
 
     with connect() as conn, conn.cursor() as cur:
-        races = entries = odds = preds = finals = 0
+        races = entries = odds = preds = finals = same = 0
         for venue in data["venues"]:
             for race in venue["races"]:
                 race_id = _upsert_race(cur, race_date, venue["code"], race)
                 races += 1
                 entries += _upsert_entries(cur, race_id, race.get("racers", []))
                 if race.get("market_prob"):
-                    _insert_odds(cur, race_id, race)
-                    odds += 1
+                    if _insert_odds(cur, race_id, race):
+                        odds += 1
+                    else:
+                        same += 1
                 if race.get("model_prob"):
                     _upsert_prediction(cur, race_id, race)
                     preds += 1
@@ -104,6 +106,8 @@ def load_pipeline_output(path: Path):
 
     print(f"取り込み完了: races={races} entries={entries} odds={odds} "
           f"predictions={preds} results={finals}")
+    if same:
+        print(f"  オッズ{same}件は直前と同じ内容だったため積んでいない")
 
 
 def load_results(path: Path):
@@ -203,17 +207,51 @@ def _upsert_entries(cur, race_id, racers) -> int:
     return len(racers)
 
 
-def _insert_odds(cur, race_id, race):
-    """オッズは時系列で積む（締切に向けて動くため）。"""
+def _insert_odds(cur, race_id, race) -> bool:
+    """
+    オッズは時系列で積む（締切に向けて動くため）。ただし直前と同じ内容なら積まない。
+
+    prerace-loop は各パスの直後に、その日のファイル「全体」を取り込ませる。
+    そのため一度取得したレースが以降の全パスで再投入され、同じ値のスナップショットが
+    「あとで取得した」顔で積み上がる。実測で1レースに13件並んだ。こうなると
+    captured_at が実際の取得時刻を表さなくなり、締切に向けたオッズの動きが読めない。
+    results ジョブがキャッシュ経由で同じファイルをもう一度通すときも同じことが起きる。
+
+    値が動いていれば必ず新しい行になるので、この省略で推移が失われることはない。
+    戻り値は実際に積んだかどうか。
+    """
+    market = _str_keys(race.get("market_prob", {}))
+    cur.execute(
+        "select overround, market_prob from odds_snapshots "
+        "where race_id = %s order by captured_at desc limit 1",
+        (race_id,),
+    )
+    if _same_odds(cur.fetchone(), race.get("overround"), market):
+        return False
+
     cur.execute(
         """
         insert into odds_snapshots (race_id, overround, market_prob, trifecta)
         values (%s, %s, %s, %s)
         """,
-        (race_id, race.get("overround"),
-         Jsonb(_str_keys(race.get("market_prob", {}))),
-         Jsonb(race.get("odds", {}))),
+        (race_id, race.get("overround"), Jsonb(market), Jsonb(race.get("odds", {}))),
     )
+    return True
+
+
+def _same_odds(last, overround, market) -> bool:
+    """直前のスナップショットと同じ内容か。数値の丸め差で誤判定しないよう桁を揃える。"""
+    if not last:
+        return False
+    prev_over, prev_market = last
+    if prev_over is None or overround is None:
+        return False
+    # overround は numeric(6,4) で保存されるので、比較も4桁に揃える
+    if round(float(prev_over), 4) != round(float(overround), 4):
+        return False
+    a = {k: round(float(v), 6) for k, v in (prev_market or {}).items()}
+    b = {k: round(float(v), 6) for k, v in market.items()}
+    return a == b
 
 
 def _upsert_prediction(cur, race_id, race):
