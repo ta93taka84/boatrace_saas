@@ -79,7 +79,9 @@
   --lane-3-bg: #e02020;  --lane-3-fg: #ffffff;  --lane-3-br: #e02020;
   --lane-4-bg: #1560d0;  --lane-4-fg: #ffffff;  --lane-4-br: #1560d0;
   --lane-5-bg: #f5c518;  --lane-5-fg: #373737;  --lane-5-br: #d9ac12;
-  --lane-6-bg: #149d4e;  --lane-6-fg: #ffffff;  --lane-6-br: #149d4e;
+  /* 6号艇だけ白文字が 3.52:1 で AA 未達だったので暗くした。#0f8442 は 4.77:1 で、
+     3号艇の 4.78:1 と同じ下限に揃う。色相は動かしていないので競技上の識別は保たれる。 */
+  --lane-6-bg: #0f8442;  --lane-6-fg: #ffffff;  --lane-6-br: #0f8442;
 
   /* 艇色の淡い地色（行の着色用）。参考サイトが車番ごとに行を淡く塗る方式 */
   --lane-1-tint: #fafafa;   /* 白だと未着色に見えるので、ごくわずかに落とす */
@@ -149,7 +151,7 @@ a { color: var(--accent); }
 
 .site-note { color: var(--text-muted); font-size: 12px; }
 
-/* 全幅の赤い帯。参考サイトのグローバルナビと同じ作り */
+/* 全幅の金の帯。参考サイトのグローバルナビと同じ作り（参考サイトは赤） */
 .gnav { background: var(--accent-bar); }
 
 .gnav-inner {
@@ -299,7 +301,7 @@ tr.lane-6 td { background: var(--lane-6-tint); }
 
 /* ---------------------------------------------------------------- タブ */
 
-/* 参考サイトの開催場・レース選択と同じ形。四角く、選択中は赤ベタ */
+/* 参考サイトの開催場・レース選択と同じ形。四角く、選択中はアクセントのベタ塗り */
 .tabs {
   display: flex;
   flex-wrap: wrap;
