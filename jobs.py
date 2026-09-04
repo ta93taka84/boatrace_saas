@@ -138,6 +138,7 @@ def morning(date_str: str = None):
     print(f"[{date_str}] {len(venues)}場")
 
     count = 0
+    problems = []
     for venue in venues:
         times = get_close_times(date_str, venue["code"])
         for rno in range(1, RACE_COUNT + 1):
@@ -148,11 +149,24 @@ def morning(date_str: str = None):
             slot["racers"] = racelist["racers"]
             if rno in times:
                 slot["closes_at"] = times[rno]
+            problems += _racer_problems(f"{venue['name']} {rno}R", racelist["racers"])
             count += 1
         _save(data)
         print(f"  {venue['name']} 完了 (累計{count}レース)")
 
     print(f"出走表取得完了: {count}レース")
+
+    # 出走表を一括で取るのはこのジョブだけなので、パーサーの列ずれが
+    # 最初に現れるのもここ。途中で落とさず最後まで取ってから落とすのは、
+    # 取れたぶんのデータを残すため。保存は各場の後に済んでいる。
+    if problems:
+        print("\n[異常] 出走表の値がありえない範囲にあります。")
+        print("       公式サイトの列構成が変わってパーサーがずれた可能性が高い。")
+        for p in problems[:20]:
+            print(f"  - {p}")
+        if len(problems) > 20:
+            print(f"  ... 他{len(problems) - 20}件")
+        sys.exit(1)
 
 
 def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> list:
@@ -245,6 +259,56 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
     return problems
 
 
+def _racer_problems(label: str, racers: list) -> list:
+    """
+    出走表の値が、その列にありえない値になっていないか検査する。
+
+    **列がずれても例外は出ない。** racelist の _int / _float はパースに
+    失敗しても 0 を返すだけなので、公式サイトが成績欄に列を1つ足すと、
+    勝率の欄に3連対率(例 54.95)がそのまま入る。数値としては正常なので
+    どこも引っかからず、race_entries に嘘の値が入り、モデルはそれを
+    特徴量として使う。overround は無関係なので既存の健全性チェックも
+    反応しない。READMEが「最も起きやすく最も気づきにくい」と書いている
+    失敗が、実行時には無防備だった。
+
+    見るのは上限だけにしてある。**列ずれの署名は「値が別の列の値域に
+    落ちること」**で、それは上限で捕まる。一方ゼロは正当にありうる
+    （当地成績の無い選手の当地勝率、デビュー直後の平均ST）ので、
+    下限で落とすと本物でない通知が増える。通知が来たら本物、という
+    運用前提を壊すほうが害が大きい。
+    """
+    problems = []
+    for r in racers:
+        lane = r.get("lane")
+        def bad(what):
+            problems.append(f"{label} {lane}号艇: {what}")
+
+        # 勝率は10点満点。3連対率(0-100)が流れ込むと必ず超える。
+        for key, cap in (("win_rate_all", 10.0), ("win_rate_venue", 10.0)):
+            if (r.get(key) or 0.0) > cap:
+                bad(f"{key}が{r[key]}（{cap}点満点）")
+        # 平均STは1秒未満。勝率(0-10)が流れ込むと超える。
+        if (r.get("avg_st") or 0.0) >= 1.0:
+            bad(f"avg_stが{r['avg_st']}（1秒未満のはず）")
+        # 各種の率は百分率
+        for key in ("in2_rate_all", "in3_rate_all", "in2_rate_venue",
+                    "in3_rate_venue", "motor_in2_rate", "motor_in3_rate",
+                    "boat_in2_rate", "boat_in3_rate"):
+            if (r.get(key) or 0.0) > 100.0:
+                bad(f"{key}が{r[key]}（百分率のはず）")
+        for key in ("motor_no", "boat_no"):
+            if (r.get(key) or 0) >= 200:
+                bad(f"{key}が{r[key]}（番号としてありえない）")
+        if r.get("class") and r["class"] not in ("A1", "A2", "B1", "B2"):
+            bad(f"級別が{r['class']!r}")
+        # 氏名の欄に数字が来るのは、選手情報の列がまるごとずれた印
+        if r.get("name") and r["name"].replace(" ", "").isdigit():
+            bad(f"氏名が数字 {r['name']!r}")
+        if r.get("racer_id") and not str(r["racer_id"]).isdigit():
+            bad(f"登録番号が{r['racer_id']!r}")
+    return problems
+
+
 def _healthcheck(data: dict, targets: list) -> list:
     """
     取得できたはずの項目が欠けていないか検証し、問題の一覧を返す。
@@ -264,6 +328,7 @@ def _healthcheck(data: dict, targets: list) -> list:
             continue
         if len(slot.get("racers", [])) != 6:
             problems.append(f"{venue['name']} {rno}R: 出走表が{len(slot.get('racers', []))}艇")
+        problems += _racer_problems(f"{venue['name']} {rno}R", slot.get("racers", []))
         if not slot.get("market_prob"):
             problems.append(f"{venue['name']} {rno}R: オッズ未取得")
         else:
