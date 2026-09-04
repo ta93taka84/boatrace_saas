@@ -5,8 +5,8 @@ export const metadata = { title: "データについて｜ボートレース デ
 export default function About() {
   return (
     <main className="wrap">
-      <p className="sub" style={{ marginBottom: 6 }}>
-        <Link href="/">← 一覧</Link>
+      <p className="crumb">
+        <Link href="/">レース一覧</Link> ＞ データについて
       </p>
       <h1>データについて</h1>
       <p className="sub">何を出しているか、何を出していないか。</p>

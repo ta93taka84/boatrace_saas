@@ -73,8 +73,8 @@ export default async function RacePage({
 
   return (
     <main className="wrap">
-      <p className="sub" style={{ marginBottom: 6 }}>
-        <Link href="/">← 一覧</Link>
+      <p className="crumb">
+        <Link href="/">レース一覧</Link> ＞ {venue.name} ＞ {race.race_no}R
       </p>
       <h1>
         {venue.name} {race.race_no}R
@@ -117,8 +117,9 @@ export default async function RacePage({
             format={(v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}pt`}
           />
           <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 10 }}>
-            右（青）は全国平均より市場が高く評価している艇。1号艇が左に振れている
-            レースは、標準どおりの決着になりにくいと市場が見ている。
+            右（青）は全国平均より市場が高く評価している艇、左（橙）は低く評価して
+            いる艇。1号艇が左に振れているレースは、標準どおりの決着になりにくいと
+            市場が見ている。
           </p>
         </div>
       </div>
@@ -158,14 +159,14 @@ export default async function RacePage({
                 const r = byLane.get(lane);
                 if (!r) {
                   return (
-                    <tr key={lane}>
+                    <tr key={lane} className={`lane-${lane}`}>
                       <td className="l"><LaneBadge lane={lane} /></td>
                       <td className="l muted" colSpan={9}>未取得</td>
                     </tr>
                   );
                 }
                 return (
-                  <tr key={lane}>
+                  <tr key={lane} className={`lane-${lane}`}>
                     <td className="l"><LaneBadge lane={lane} /></td>
                     <td className="l">
                       {r.name}

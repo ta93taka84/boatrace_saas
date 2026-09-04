@@ -1,18 +1,14 @@
 import type { Metadata } from "next";
-import { Geist_Mono } from "next/font/google";
+import Link from "next/link";
+import { SiteNav } from "@/components/SiteNav";
 import "./globals.css";
 
 /*
- * 数字と英字を等幅にする。表の桁が揃い、オッズや勝率を縦に読み比べられる。
- * 日本語グリフは持たないので、日本語は globals.css 側のフォールバックが描く。
- * next/font はビルド時にフォントを取得して自前で配信するため、
- * 外部CDNへのリクエストは発生しない。
+ * 書体は globals.css のフォントスタックに任せている。参考サイト（chariloto.com）が
+ * メイリオ系の日本語ゴシックを使っており、本文がほぼ日本語のこのサイトでは
+ * 端末に入っている書体で足りる。Webフォントを読み込むと、日本語グリフを
+ * 持たない欧文フォントのためだけに通信が増えることになる。
  */
-const geistMono = Geist_Mono({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-mono",
-});
 
 export const metadata: Metadata = {
   title: "ボートレース データビュー",
@@ -21,8 +17,19 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ja" className={geistMono.variable}>
-      <body>{children}</body>
+    <html lang="ja">
+      <body>
+        <header className="site">
+          <div className="site-inner">
+            <Link href="/" className="site-logo">
+              ボートレース データビュー
+            </Link>
+            <span className="site-note">全場のレースデータを集約して比較する</span>
+          </div>
+        </header>
+        <SiteNav />
+        {children}
+      </body>
     </html>
   );
 }

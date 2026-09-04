@@ -1,171 +1,99 @@
 /*
  * 配色とレイアウトのトークン。
  *
- * 構成の指針は DESIGN.md（Rarible のスタイル参照）から「構造」だけを取り込んでいる。
- * 等幅書体、影を使わず1pxのヘアラインで面を分ける、8px基準の詰めた余白、
- * 数値の右揃え、フラットな面。一方でアイデンティティ（#faff00 の単一アクセント、
- * ダーク専用、Latin前提の型指定）は採らない。理由は下の3点。
+ * 参考にしたのは chariloto.com（競輪・オートレースの投票サイト）。同じ公営競技で
+ * 日本語・高密度の表が主役という条件が近く、実測して次の特徴を取り込んでいる。
+ *
+ *   白地／パネル灰、文字は純黒ではなく #373737、主色は赤、機能色に橙と青、
+ *   角丸なし、影なし、罫線は1pxの全セル格子、書体はメイリオ 14px/1.5、
+ *   タブは四角く選択中は赤ベタ、番号は四角い色チップ＋行全体を淡く着色。
+ *
+ * 参考サイトは車券を売るサイトなので、購入を促す表現は取り込まない。
+ * 取り込むのは見た目の体系だけにする。
  *
  * 色の役割は3つに分けてある。混ぜないこと。
  *
  *   1. 艇色（--lane-*）… 競技標準（1白2黒3赤4青5黄6緑）。艇の識別だけに使う。
- *      白と黒を含むため彩度・明度の基準を構造的に満たせず、満たすよう調整すると
- *      「白」「黒」という競技上の識別が壊れる。だからチャートの符号化には使わず、
- *      数字を内側に持つバッジ（LaneBadge）に限定する。色が読めなくても艇番は伝わる。
- *      DESIGN.md の「アクセントは1色だけ」はこの6色と両立しないので採用しない。
- *
+ *      白と黒を含むため彩度・明度の基準を構造的に満たせず、チャートの塗りには
+ *      使えない。数字を内側に持つチップと、行の淡い地色で表す。参考サイトも
+ *      車番に同じ方式を採っている。
  *   2. データの色（--seq-* / --div-*）… 量の大小は単一色相の濃淡、正負の極性は
- *      2色相＋中立グレー。系列の識別には使わない（識別はバッジが担う）。
- *      DESIGN.md にはチャート用の色が無く、唯一の指示である「正はlime・負はred」は
- *      同ドキュメント自身の「第2のアクセント禁止」と矛盾するうえ、redのトークンも
- *      定義されていない。色相で符号を表すより、棒の長さと中央のゼロ線で読ませる
- *      ほうが誤読が起きないため、既存の発散型を維持する。
+ *      2色相＋中立グレー。
+ *      発散色を青←→赤から青←→橙に変えている。赤がUIの主色になったため、
+ *      同じ赤が「負の値」も意味すると読み手が区別できなくなる。橙は参考サイトの
+ *      パレットに元からある色なので、寄せる方針とも矛盾しない。
+ *   3. アクセント（--accent）… ナビと選択状態に使う赤。データには使わない。
  *
- *   3. アクセント（--accent）… リンクと選択状態だけに使うUIの色。データの色とは
- *      別の色相にしてある。選択中の日付が「値の大きい棒」に見えると操作とデータの
- *      区別がつかなくなるため。紫にしたのは、艇色6色・逐次色・発散色・状態色の
- *      どれとも衝突しない唯一の色相だから。
+ * ライト専用。参考サイトにダークの定義が無く、こちらで作ると寄せる根拠が
+ * 無くなるため。戻すときは @media (prefers-color-scheme: dark) で上書きする。
  *
- * 明度コントラストは実測して決めている。地の色に対する比率をコメントに残す。
+ * コントラスト比は実測して決めている。参考サイトの値をそのまま使うと
+ * WCAG AA に届かない箇所があったので、そこだけ濃くしてある。
  */
 
 :root {
   color-scheme: light;
 
-  /* 面。カードは地色とほぼ同じで、境界はヘアラインだけで作る */
-  --page: #f9f9f7;
-  --surface-1: #fcfcfb;
-  --surface-2: #f0efec;   /* コードブロックなど一段沈む面 */
+  /* 面 */
+  --page: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f4f3f3;   /* 表のヘッダ、コードブロックなど一段沈む面 */
+  --surface-3: #f1f0f0;   /* タブの見出しなど */
 
-  --text-primary: #0b0b0b;    /* 19.0:1 */
-  --text-secondary: #52514e;  /*  7.5:1 */
-  --text-muted: #6f6d67;      /*  4.9:1 … 旧 #898781 は 3.4:1 で AA 未達だった */
-  --grid: #e1e0d9;
-  --axis: #c3c2b7;
+  --text-primary: #373737;    /* 9.6:1 */
+  --text-secondary: #5f5f5f;  /* 6.1:1 */
+  --text-muted: #6e6e6e;      /* 5.0:1 … 参考サイトの #959595 は 2.9:1 でAA未達 */
+  --grid: #dddddd;            /* 罫線 */
+  --axis: #bdbdbd;
+
+  /* UIのアクセント。ナビと選択状態だけに使い、データには使わない */
+  --accent: #d92b36;          /* 4.9:1。参考サイトの #f23535 は 3.5:1 でAA未達 */
+  --accent-bar: #f23535;      /* ベタ塗りの帯。上に載るのは白文字 */
+  --accent-ink: #ffffff;
 
   /* 単一系列の大小比較に使う逐次色相（青） */
-  --seq-strong: #2a78d6;
-  --seq-mid: #6da7ec;
-  --seq-weak: #cde2fb;
+  --seq-strong: #1c61ad;
+  --seq-mid: #6d9bc4;
+  --seq-weak: #d6e4f2;
 
-  /* 正負の極性に使う発散色（青←→赤、中立はグレー） */
-  --div-pos: #2a78d6;
-  --div-neg: #d03b3b;
-  --div-mid: #f0efec;
+  /* 正負の極性に使う発散色（青←→橙、中立はグレー） */
+  --div-pos: #1c61ad;
+  --div-neg: #e07a1f;
+  --div-mid: #ebeaea;
 
   /* 状態色。系列色として転用しない */
-  --good: #0ca30c;
-  --warning: #fab219;
-  --critical: #d03b3b;
+  --good: #1c8f3c;
+  --warning: #e08b00;
+  --critical: #c62828;
 
-  /* UIのアクセント。リンクと選択状態専用 */
-  --accent: #6d28d9;          /*  6.7:1 */
-  --accent-ink: #ffffff;      /* 塗りの上に載せる文字 7.1:1 */
-
-  /* 艇色（バッジ専用） */
-  --lane-1-bg: #ffffff;  --lane-1-fg: #0b0b0b;  --lane-1-br: #c3c2b7;
-  --lane-2-bg: #111111;  --lane-2-fg: #ffffff;  --lane-2-br: #111111;
+  /* 艇色（チップ用） */
+  --lane-1-bg: #ffffff;  --lane-1-fg: #373737;  --lane-1-br: #999999;
+  --lane-2-bg: #1a1a1a;  --lane-2-fg: #ffffff;  --lane-2-br: #1a1a1a;
   --lane-3-bg: #e02020;  --lane-3-fg: #ffffff;  --lane-3-br: #e02020;
   --lane-4-bg: #1560d0;  --lane-4-fg: #ffffff;  --lane-4-br: #1560d0;
-  --lane-5-bg: #f5c518;  --lane-5-fg: #0b0b0b;  --lane-5-br: #d9ac12;
+  --lane-5-bg: #f5c518;  --lane-5-fg: #373737;  --lane-5-br: #d9ac12;
   --lane-6-bg: #149d4e;  --lane-6-fg: #ffffff;  --lane-6-br: #149d4e;
 
-  /* 余白は8px基準。DESIGN.md の density: compact に合わせる */
+  /* 艇色の淡い地色（行の着色用）。参考サイトが車番ごとに行を淡く塗る方式 */
+  --lane-1-tint: #ffffff;
+  --lane-2-tint: #f0f0f0;
+  --lane-3-tint: #fdecec;
+  --lane-4-tint: #e9f1fc;
+  --lane-5-tint: #fdf7e2;
+  --lane-6-tint: #e9f6ee;
+
   --space-1: 8px;
   --space-2: 16px;
   --space-3: 24px;
-  --space-4: 32px;
-  --space-6: 48px;
 
-  --radius-sm: 6px;    /* ボタン・入力・小さなタイル */
-  --radius-lg: 12px;   /* カード・大きな容器 */
-  --radius-full: 9999px;
+  --page-max: 1240px;
 
   /*
-   * 文字サイズ。DESIGN.md の 10px は Latin 前提の値で、日本語には小さすぎる。
-   * 最小段を12pxに引き上げている。
+   * 参考サイトに合わせてメイリオを先頭に置く。日本語の本文が主体なので
+   * 等幅にはしない。桁を揃える必要がある数値だけ .num で tabular-nums にする。
    */
-  --text-caption: 12px;
-  --text-body: 14px;
-  --text-subheading: 18px;
-  --text-heading: 24px;
-
-  --page-max: 1440px;
-
-  /*
-   * 等幅を主体にする。--font-mono は next/font が <html> に付ける Geist Mono。
-   * 日本語グリフを持たないので、日本語は後続のフォールバックが描く。
-   * 数字と英字だけが等幅になり、表の桁が揃う。
-   * DESIGN.md が見出しに指定する Tomorrow は、本文がほぼ日本語のこのサイトでは
-   * ほとんど描画されないため読み込まない。
-   */
-  --font-ui: var(--font-mono, ui-monospace), "Hiragino Sans", "Yu Gothic UI",
-             "Meiryo", system-ui, sans-serif;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { color-scheme: dark; }
-}
-
-/*
- * ダークの面は DESIGN.md の指定に寄せている（canvas #0a0a0a、
- * ヘアライン #27272a、操作面 #18181b）。カードは地色と同じで、
- * 境界線だけで分ける。
- */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --page: #0a0a0a;
-    --surface-1: #0a0a0a;
-    --surface-2: #18181b;
-
-    --text-primary: #ffffff;    /* 19.8:1 */
-    --text-secondary: #c3c2b7;  /* 11.1:1 */
-    --text-muted: #9d9d9d;      /*  7.3:1 */
-    --grid: #27272a;
-    --axis: #3b3b3b;
-
-    --seq-strong: #3987e5;
-    --seq-mid: #5598e7;
-    --seq-weak: #184f95;
-
-    --div-pos: #3987e5;
-    --div-neg: #e05555;         /* 地が暗くなったぶん明るい段に寄せる */
-    --div-mid: #27272a;
-
-    --accent: #a78bfa;          /*  7.3:1 */
-    --accent-ink: #0a0a0a;      /* 塗りの上に載せる文字 7.3:1 */
-
-    --lane-1-bg: #e8e8e4;  --lane-1-fg: #0b0b0b;  --lane-1-br: #e8e8e4;
-    --lane-2-bg: #111111;  --lane-2-fg: #ffffff;  --lane-2-br: #55534d;
-  }
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-
-  --page: #0a0a0a;
-  --surface-1: #0a0a0a;
-  --surface-2: #18181b;
-
-  --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted: #9d9d9d;
-  --grid: #27272a;
-  --axis: #3b3b3b;
-
-  --seq-strong: #3987e5;
-  --seq-mid: #5598e7;
-  --seq-weak: #184f95;
-
-  --div-pos: #3987e5;
-  --div-neg: #e05555;
-  --div-mid: #27272a;
-
-  --accent: #a78bfa;
-  --accent-ink: #0a0a0a;
-
-  --lane-1-bg: #e8e8e4;  --lane-1-fg: #0b0b0b;  --lane-1-br: #e8e8e4;
-  --lane-2-bg: #111111;  --lane-2-fg: #ffffff;  --lane-2-br: #55534d;
+  --font-ui: "Meiryo", "メイリオ", "Hiragino Sans", "Yu Gothic UI",
+             Arial, Verdana, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -175,118 +103,233 @@ body {
   background: var(--page);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: var(--text-body);
+  font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 a { color: var(--accent); }
 
-/* キーボード操作の現在位置を必ず見えるようにする */
 :focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
+
+/* ---------------------------------------------------------------- ヘッダ */
+
+.site {
+  border-bottom: 1px solid var(--grid);
+}
+
+.site-inner {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: 12px var(--space-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.site-logo {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-decoration: none;
+  border-left: 5px solid var(--accent-bar);
+  padding-left: 10px;
+}
+
+.site-note { color: var(--text-muted); font-size: 12px; }
+
+/* 全幅の赤い帯。参考サイトのグローバルナビと同じ作り */
+.gnav { background: var(--accent-bar); }
+
+.gnav-inner {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  display: flex;
+}
+
+.gnav a {
+  flex: 1;
+  text-align: center;
+  padding: 12px 8px;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 14px;
+  border-right: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.gnav a:first-child { border-left: 1px solid rgba(255, 255, 255, 0.35); }
+.gnav a:hover { background: rgba(0, 0, 0, 0.12); }
+.gnav a[aria-current="page"] { background: rgba(0, 0, 0, 0.18); font-weight: 700; }
 
 .wrap {
   max-width: var(--page-max);
   margin: 0 auto;
-  padding: var(--space-3) var(--space-2) var(--space-6);
+  padding: var(--space-2) var(--space-2) 64px;
 }
 
-/*
- * 影は使わない。面の区別はヘアラインだけで作る。
- * （DotPlot の box-shadow は点が重なったときの輪郭リングで、
- *   浮き上がりの表現ではないため別物。）
- */
-.card {
-  background: var(--surface-1);
-  border: 1px solid var(--grid);
-  border-radius: var(--radius-lg);
-  padding: var(--space-2);
-  margin-bottom: var(--space-2);
+.crumb {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-2);
 }
 
-h1 { font-size: var(--text-heading); line-height: 1.29; margin: 0 0 var(--space-1); }
-h2 { font-size: var(--text-subheading); line-height: 1.4; margin: 0 0 var(--space-1); }
-h3 {
-  font-size: var(--text-caption);
+.crumb a { color: var(--text-muted); }
+
+/* ---------------------------------------------------------------- 見出し */
+
+h1 {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.3;
   margin: 0 0 var(--space-1);
-  color: var(--text-secondary);
-  font-weight: 600;
+  border-left: 5px solid var(--accent-bar);
+  padding-left: 10px;
 }
 
-.sub {
-  color: var(--text-secondary);
-  font-size: var(--text-caption);
-  margin: 0 0 var(--space-3);
+h2 { font-size: 16px; font-weight: 700; margin: 0 0 var(--space-1); }
+
+h3 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--grid);
 }
+
+.sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 var(--space-2); }
 .muted { color: var(--text-muted); }
 
 .notice {
-  border-left: 3px solid var(--warning);
-  background: color-mix(in srgb, var(--warning) 8%, transparent);
-  padding: var(--space-1) var(--space-2);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  font-size: var(--text-caption);
-  margin-bottom: var(--space-3);
+  border: 1px solid var(--grid);
+  border-left: 5px solid var(--warning);
+  background: var(--surface-2);
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: var(--space-2);
   color: var(--text-secondary);
 }
 
-/* 横スクロールはこのコンテナの中だけで起こす。body は横に流さない。 */
 .scroll-x { overflow-x: auto; }
 
-/* 沈む面。コードブロックなど */
 .inset {
   background: var(--surface-2);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-caption);
+  border: 1px solid var(--grid);
+  padding: 10px 12px;
+  font-size: 12px;
   margin: 0;
 }
 
-table { border-collapse: collapse; width: 100%; font-size: var(--text-caption); }
-th, td { padding: 6px 10px; text-align: right; white-space: nowrap; }
-th {
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 11px;
-  letter-spacing: .02em;
-  border-bottom: 1px solid var(--axis);
-}
-td { border-bottom: 1px solid var(--grid); }
-th.l, td.l { text-align: left; }
-tbody tr:last-child td { border-bottom: none; }
+/* ---------------------------------------------------------------- パネル */
 
+/* 角丸も影も使わない。面の区別は1pxの罫線だけで作る */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--grid);
+  padding: 12px 14px;
+  margin-bottom: var(--space-2);
+}
+
+/* ---------------------------------------------------------------- 表 */
+
+/* 参考サイトに合わせて全セルに罫線を引き、ヘッダに地色を敷く */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+th, td {
+  padding: 6px 8px;
+  text-align: center;
+  white-space: nowrap;
+  border: 1px solid var(--grid);
+}
+
+th {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-weight: 700;
+  font-size: 11px;
+}
+
+th.l, td.l { text-align: left; }
 .num { font-variant-numeric: tabular-nums; }
+
+/* 艇ごとに行を淡く着色する。チップだけより艇の対応が追いやすい */
+tr.lane-1 td { background: var(--lane-1-tint); }
+tr.lane-2 td { background: var(--lane-2-tint); }
+tr.lane-3 td { background: var(--lane-3-tint); }
+tr.lane-4 td { background: var(--lane-4-tint); }
+tr.lane-5 td { background: var(--lane-5-tint); }
+tr.lane-6 td { background: var(--lane-6-tint); }
+
+/* ---------------------------------------------------------------- タブ */
+
+/* 参考サイトの開催場・レース選択と同じ形。四角く、選択中は赤ベタ */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--grid);
+  border-right: none;
+  margin-bottom: var(--space-2);
+  background: var(--surface-1);
+}
+
+.tabs > a, .tabs > span {
+  padding: 8px 14px;
+  border-right: 1px solid var(--grid);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabs > span.tabs-label {
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.tabs > a:hover { background: var(--surface-2); }
+
+.tabs > a[aria-current="page"] {
+  background: var(--accent-bar);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------- 配置 */
 
 .grid2 {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: var(--space-2);
 }
 
 .venue-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--space-1);
 }
 
-.race-links { display: flex; flex-wrap: wrap; gap: 5px; margin-top: var(--space-1); }
+.race-links { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+
 .race-links a {
-  display: inline-block;
-  min-width: 34px;
-  text-align: center;
-  padding: 4px 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 40px;
+  justify-content: center;
+  padding: 5px 6px;
   border: 1px solid var(--grid);
-  border-radius: var(--radius-sm);
   text-decoration: none;
   color: var(--text-primary);
-  font-size: var(--text-caption);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-.race-links a:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--surface-2);
-}
+
+.race-links a:hover { border-color: var(--accent); color: var(--accent); }

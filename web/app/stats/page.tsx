@@ -38,8 +38,8 @@ export default async function StatsPage() {
   if (!stats) {
     return (
       <main className="wrap">
-        <p className="sub" style={{ marginBottom: 6 }}>
-          <Link href="/">← 一覧</Link>
+        <p className="crumb">
+          <Link href="/">レース一覧</Link> ＞ 実績集計
         </p>
         <h1>実績集計</h1>
         <div className="card">
@@ -64,8 +64,8 @@ export default async function StatsPage() {
 
   return (
     <main className="wrap">
-      <p className="sub" style={{ marginBottom: 6 }}>
-        <Link href="/">← 一覧</Link>
+      <p className="crumb">
+        <Link href="/">レース一覧</Link> ＞ 実績集計
       </p>
       <h1>実績集計</h1>
       <p className="sub">

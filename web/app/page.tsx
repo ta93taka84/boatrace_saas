@@ -71,17 +71,14 @@ py -3 jobs.py prerace --window 40`}
 
   return (
     <main className="wrap">
-      <h1>ボートレース データビュー</h1>
+      <p className="crumb">レース一覧</p>
+      <h1>{shown} のレース</h1>
       <p className="sub">
-        {shown} ・ {day.venues.length}場 {totalRaces}レース
+        {day.venues.length}場 {totalRaces}レース
         <span className="muted"> ・ オッズ取得済み {withOdds}</span>
         {day.updated_at && (
           <span className="muted"> ・ 更新 {day.updated_at.slice(11, 16)}</span>
         )}
-        {" ・ "}
-        <Link href="/about">データについて</Link>
-        {" ・ "}
-        <Link href="/stats">実績集計</Link>
       </p>
 
       <DateNav dates={dates} current={day.date} />

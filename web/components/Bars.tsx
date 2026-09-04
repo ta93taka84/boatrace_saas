@@ -35,7 +35,6 @@ export function ProbBars({
                 flex: 1,
                 height: 14,
                 background: "var(--grid)",
-                borderRadius: 4,
                 overflow: "hidden",
               }}
             >
@@ -45,7 +44,6 @@ export function ProbBars({
                   width: `${pct}%`,
                   height: "100%",
                   background: strong ? "var(--seq-strong)" : "var(--seq-mid)",
-                  borderRadius: 4,
                 }}
               />
             </div>
@@ -71,6 +69,9 @@ export function ProbBars({
  * コース標準からの乖離。正負の極性を持つので発散型で描く。
  * 中央が「標準どおり」で、右が市場の高評価、左が低評価。
  * 市場が1号艇以外を本命視しているレースが一目で分かる。
+ *
+ * 負の側は赤ではなく橙。赤はUIのアクセント（ナビと選択状態）に使っているので、
+ * 同じ赤が「負の値」も意味すると読み手が区別できなくなる。
  */
 export function DivergingBars({
   values,
@@ -99,7 +100,6 @@ export function DivergingBars({
                   position: "absolute",
                   inset: 0,
                   background: "var(--div-mid)",
-                  borderRadius: 4,
                 }}
               />
               {/* 中央のゼロ基準線 */}
@@ -123,7 +123,6 @@ export function DivergingBars({
                     width: `${half}%`,
                     left: positive ? "50%" : `${50 - half}%`,
                     background: positive ? "var(--div-pos)" : "var(--div-neg)",
-                    borderRadius: positive ? "0 4px 4px 0" : "4px 0 0 4px",
                   }}
                 />
               )}
