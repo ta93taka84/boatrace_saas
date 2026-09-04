@@ -1,330 +1,375 @@
-# Rarible — Style Reference
-> blacklight crypto terminal — a midnight trading floor where a single highlighter mark signals everything that matters.
+# ボートレース データビュー — スタイルリファレンス
 
-**Theme:** dark
+この文書は `web/app/globals.css` と `web/components/` に**実装されている**デザインを
+記述したものである。値はすべて実装から取っている。ここに書いていない色・寸法・
+角丸を新しく作らないこと。
 
-Rarible runs on a near-black canvas punctuated by one electric chartreuse accent — a single highlighter color against a dark market terminal. The interface is dense, data-first, and overwhelmingly achromatic, with the neon yellow acting as a switch: active states, the primary login CTA, 
+## 方針
 
-## Tokens — Colors
+参考にしたのは **chariloto.com**（競輪・オートレースの投票サイト）。同じ公営競技で、
+日本語・高密度の表が主役という条件が近い。実測して次の特徴を取り込んでいる。
 
-| Name | Value | Token | Role |
-|------|-------|-------|------|
-| Highlighter Lime | `#faff00` | `--color-highlighter-lime` | Green action color for filled buttons, selected navigation states, and focused conversion moments |
-| Onyx Black | `#0a0a0a` | `--color-onyx-black` | Page canvas, table row backgrounds, elevated card surfaces — the base layer everything else floats on |
-| Zinc Hairline | `#27272a` | `--color-zinc-hairline` | Borders, dividers, table cell separators, card outlines — the most-used border color, barely visible against the canvas, defining structure without weight |
-| Carbon | `#18181b` | `--color-carbon` | Button hover/active surfaces, secondary card backgrounds — one step above canvas for subtle elevation |
-| Pure White | `#ffffff` | `--color-pure-white` | Primary text, icon strokes, logo fills, filled-chip text — the default foreground for the entire interface |
-| Steel Gray | `#9d9d9d` | `--color-steel-gray` | Secondary/muted text, inactive nav items, table metadata, helper labels |
-| Ash Gray | `#6c6c6c` | `--color-ash-gray` | Tertiary text, disabled controls, low-emphasis metadata |
-| Smoke | `#3b3b3b` | `--color-smoke` | Heavier borders, input field outlines — for elements that need more definition than the standard hairline |
+- 白地／パネル灰、文字は純黒ではなく `#373737`
+- 角丸なし、影なし、罫線は1pxの全セル格子
+- 書体はメイリオ 14px/1.5
+- タブは四角く、選択中はベタ塗りで反転
+- 番号は四角い色チップ＋行全体を淡く着色
 
-## Tokens — Typography
+**参考サイトは車券を売るサイトなので、購入を促す表現は取り込まない。**
+取り込むのは見た目の体系だけにする。訴求軸は「勝てる」ではなく
+「データが見やすい」に置く（README.md「表現に関する注意」）。
 
-### Geist Mono — Primary UI typeface — all body text, table data, buttons, inputs, navigation, prices, and metadata. The monospace choice gives the marketplace a terminal/trading-desk identity, aligning numerical data in tables and reinforcing a developer/collector audience. · `--font-geist-mono`
-- **Substitute:** JetBrains Mono, IBM Plex Mono, Space Mono
-- **Weights:** 400, 500
-- **Sizes:** 10px, 12px, 14px, 18px, 24px
-- **Line height:** 1.00–1.43
-- **Letter spacing:** normal at all sizes
-- **Role:** Primary UI typeface — all body text, table data, buttons, inputs, navigation, prices, and metadata. The monospace choice gives the marketplace a terminal/trading-desk identity, aligning numerical data in tables and reinforcing a developer/collector audience.
+**ライト専用。** 参考サイトにダークの定義が無く、こちらで作ると寄せる根拠が
+無くなるため。`:root` に `color-scheme: light` を宣言している。戻すときは
+`@media (prefers-color-scheme: dark)` で上書きする。
 
-### Tomorrow — Display and section headings — section labels like 'Trending', 'Cards', 'Trusted by', and 'News'. A clean sans-serif contrast to the monospace body, giving headlines a slightly softer, more editorial voice while staying within the technical character. · `--font-tomorrow`
-- **Substitute:** Inter, DM Sans, Manrope
-- **Weights:** 400, 500
-- **Sizes:** 14px, 18px, 24px, 28px
-- **Line height:** 1.17–1.43
-- **Role:** Display and section headings — section labels like 'Trending', 'Cards', 'Trusted by', and 'News'. A clean sans-serif contrast to the monospace body, giving headlines a slightly softer, more editorial voice while staying within the technical character.
+## 色の役割は3つに分かれている。混ぜないこと
 
-### Type Scale
+| 役割 | トークン | 使いどころ |
+|---|---|---|
+| 1. 艇色 | `--lane-*` | 艇の識別だけ。チップと行の地色 |
+| 2. データの色 | `--seq-*` / `--div-*` | チャートの塗り |
+| 3. アクセント | `--accent-bar` / `--accent` / `--accent-ink` | ナビと選択状態。データには使わない |
 
-| Role | Size | Line Height | Letter Spacing | Token |
-|------|------|-------------|----------------|-------|
-| caption | 10px | 1 | — | `--text-caption` |
-| body | 14px | 1.43 | — | `--text-body` |
-| subheading | 18px | 1.4 | — | `--text-subheading` |
-| heading | 24px | 1.29 | — | `--text-heading` |
-| heading-lg | 28px | 1.17 | — | `--text-heading-lg` |
+**艇色をチャートの塗りに使ってはならない。** 競技標準の艇色（1白2黒3赤4青5黄6緑）は
+白と黒を含むため、彩度・明度の基準を構造的に満たせない。満たすよう調整すると
+競技上の識別が壊れる。だから艇色は「数字を内側に持つ四角いチップ」と「行の淡い地色」
+だけで表し、量を表す面には使わない。
 
-## Tokens — Spacing & Shapes
+**アクセントをデータの色に使ってはならない。** 選択中のタブとチャートの棒が
+同じ色になると、選択されたタブが「値の大きい棒」に見えて操作とデータの
+区別がつかなくなる（`web/components/DateNav.tsx` のコメントに同じ判断がある）。
 
-**Base unit:** 8px
+## トークン
 
-**Density:** compact
+### 面
 
-### Spacing Scale
+| トークン | 値 | 用途 |
+|---|---|---|
+| `--page` | `#ffffff` | ページ地 |
+| `--surface-1` | `#ffffff` | `.card` `.tabs` の地。ドットの縁取りリング |
+| `--surface-2` | `#f4f3f3` | 表のヘッダ、`.notice`、`.inset`、タブのホバー |
+| `--surface-3` | `#f1f0f0` | `.tabs-label`（タブ帯の見出し） |
 
-| Name | Value | Token |
-|------|-------|-------|
-| 8 | 8px | `--spacing-8` |
-| 16 | 16px | `--spacing-16` |
-| 24 | 24px | `--spacing-24` |
-| 32 | 32px | `--spacing-32` |
-| 40 | 40px | `--spacing-40` |
-| 48 | 48px | `--spacing-48` |
+面の区別は**1pxの罫線だけ**で作る。影も角丸も使わない。
 
-### Border Radius
+### 文字と罫線
 
-| Element | Value |
-|---------|-------|
-| cards | 12px |
-| pills | 9999px |
-| images | 6px |
-| inputs | 6px |
-| buttons | 6px |
+| トークン | 値 | 白地でのコントラスト |
+|---|---|---|
+| `--text-primary` | `#373737` | 11.9:1 |
+| `--text-secondary` | `#5f5f5f` | 6.4:1 |
+| `--text-muted` | `#6e6e6e` | 5.1:1 |
+| `--grid` | `#dddddd` | 罫線 |
+| `--axis` | `#bdbdbd` | 発散チャートのゼロ基準線 |
 
-### Shadows
+`--text-muted` は参考サイトの `#959595` をそのまま使うと **2.9:1 でAA未達**だったため
+濃くしてある。参考サイトの値をそのまま持ってこないこと。
 
-| Name | Value | Token |
-|------|-------|-------|
-| subtle | `rgba(0, 0, 0, 0.05) 0px 1px 2px 0px` | `--shadow-subtle` |
-| subtle-2 | `rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0p...` | `--shadow-subtle-2` |
+### アクセント（金）
 
-### Layout
+| トークン | 値 | 用途 |
+|---|---|---|
+| `--accent-bar` | `#c9a52e` | ベタ塗りの帯。グローバルナビ、見出しの縦罫、選択中のタブ |
+| `--accent` | `#8f7219` | 白地に置く文字とリンク、フォーカスリング（4.58:1） |
+| `--accent-ink` | `#373737` | 金の帯の上に載せる文字（5.05:1） |
 
-- **Page max-width:** 1440px
-- **Section gap:** 32px
-- **Card padding:** 16px
-- **Element gap:** 8px
+**金は明るいので、白文字を載せると 2.36:1 でAA基準の半分しかない。**
+帯の上は黒文字にする。白地に置く文字も `#c9a52e` では 2.36:1 なので、
+文字用に濃くした段（`--accent`）を別に持っている。この2段を1つにまとめないこと。
 
-## Components
+**金の帯の上では、状態表現は「暗くする」ではなく「明るくする」。**
+黒を18%重ねると 3.45:1 まで落ちてAA未達になる。白を重ねれば通る。
+
+```css
+.gnav a:hover                  { background: rgba(255, 255, 255, 0.20); }  /* 6.1:1 */
+.gnav a[aria-current="page"]   { background: rgba(255, 255, 255, 0.32); }  /* 6.8:1 */
+```
 
-### Header Navigation
-**Role:** Top-level site navigation with search, chain selector, and auth actions
+### データの色
 
-Full-width dark bar (#0a0a0a) with logo left, primary nav (Explore, Mint, Swap) in 14px Geist Mono, centered search input, and right-aligned $RARI link plus Login button. Height approx 56px, items separated by 8–12px gaps.
+量の大小は**単一色相の濃淡**、正負の極性は**2色相＋中立グレー**。
 
-### Primary CTA Button (Login)
-**Role:** Main conversion action in the header
+| トークン | 値 | 用途 |
+|---|---|---|
+| `--seq-strong` | `#1c61ad` | 逐次色の濃い側。最良値の点 |
+| `--seq-mid` | `#6d9bc4` | 逐次色の標準。棒とドットの既定 |
+| `--seq-weak` | `#d6e4f2` | 逐次色の淡い側 |
+| `--div-pos` | `#1c61ad` | 発散色の正側（市場の高評価） |
+| `--div-neg` | `#c1272d` | 発散色の負側（市場の低評価） |
+| `--div-mid` | `#ebeaea` | 発散色の中立の地 |
 
-Filled #faff00 background, #000000 text, 6px border-radius, approx 8px vertical × 16px horizontal padding, 14px Geist Mono weight 500. The only colored button on the page — its singularity is the point.
+**発散色は青←→赤。** 以前アクセントが赤だったときは負の側を橙にしていたが、
+アクセントを金にしたので赤が空いた。橙は金と近く画面が一色に寄るうえ、
+「負は赤」のほうが説明なしで読める。
 
-### Ghost Button (Go to mint page)
-**Role:** Secondary action on featured collections
+### 状態色
 
-Transparent background, 1px #27272a border, #ffffff text, 6px radius, 8px × 16px padding, 14px Geist Mono. Sits inside cards as a quiet action.
+| トークン | 値 | 用途 |
+|---|---|---|
+| `--good` | `#1c8f3c` | — |
+| `--warning` | `#e08b00` | `.notice` の左罫、注意を促すカードの枠 |
+| `--critical` | `#c62828` | `ErrorCard` の枠と見出し（白地に 5.6:1） |
 
-### Chain Filter Pill
-**Role:** Horizontal chain selector below the search bar
+**状態色を系列色に転用しない。** `--warning` は白地で 2.7:1、`--good` は 4.2:1 しかなく、
+本文の色として使うとAAを満たさない。**枠線とアイコン級の用途に限る。**
 
-Small pill with icon + label (All, Ethereum, MegaETH, Base, RARI, More). Default state: transparent with #27272a border. Active/selected state: #faff00 background with #000000 text. Radius 9999px. Active state uses the brand lime to indicate the single selected chain.
+### 艇色（チップ用）
 
-### Featured Collection Banner
-**Role:** Hero card showcasing a live minting collection
+競技標準。数字を必ずチップの内側に置くので、色が読めなくても艇番は伝わる。
 
-Full-width card with #0a0a0a background, 1px #27272a border, 12px radius, 16–24px padding. Contains a 'Minting now' label in #faff00, collection title in 18–24px Tomorrow, creator info, and ghost CTA button. Right side shows the collection's brand mark/avatar.
+| 艇 | `-bg` | `-fg` | `-br` | 文字コントラスト |
+|---|---|---|---|---|
+| 1（白） | `#ffffff` | `#373737` | `#999999` | 11.9:1 |
+| 2（黒） | `#1a1a1a` | `#ffffff` | `#1a1a1a` | 17.4:1 |
+| 3（赤） | `#e02020` | `#ffffff` | `#e02020` | 4.8:1 |
+| 4（青） | `#1560d0` | `#ffffff` | `#1560d0` | 5.8:1 |
+| 5（黄） | `#f5c518` | `#373737` | `#d9ac12` | 7.3:1 |
+| 6（緑） | `#149d4e` | `#ffffff` | `#149d4e` | **3.5:1（AA未達）** |
 
-### Collection Card (Grid Item)
-**Role:** Browseable NFT collection thumbnail in the cards row
+1と5は地が明るいので文字を `#373737` にし、輪郭が消えないよう `-br` を別に持たせている。
 
-Approx 200×200px tile, 6px radius, 1px #27272a border. Image fills top portion. Overlay or footer shows collection name (14px Tomorrow) and floor price in 12px Geist Mono with #9d9d9d. Cards have no shadow — only border separation.
+### 艇色の淡い地色（行の着色用）
 
-### Trending Data Table
-**Role:** Sortable list of top collections with live market data
+参考サイトが車番ごとに行を淡く塗る方式。チップだけより艇の対応が追いやすい。
+横スクロールする表で艇番の列が画面外に出たときの手がかりも兼ねる。
 
-Full-width table on #0a0a0a, row separators in #27272a, column headers in 12px Geist Mono #9d9d9d uppercase. Cell content in 14px Geist Mono #ffffff. Avatar + name column left, numeric columns right-aligned. Positive deltas in #faff00, negative in red/pink. Toggle 'List collection' button in header with time-range pill selector (1h, 6h, 24h, 7d, 30d).
+| トークン | 値 |
+|---|---|
+| `--lane-1-tint` | `#fafafa` |
+| `--lane-2-tint` | `#f0f0f0` |
+| `--lane-3-tint` | `#fdecec` |
+| `--lane-4-tint` | `#e9f1fc` |
+| `--lane-5-tint` | `#fdf7e2` |
+| `--lane-6-tint` | `#e9f6ee` |
 
-### Search Input
-**Role:** Central collection search in the header
+1号艇は白だと未着色に見えるので、ごくわずかに落としてある。
 
-Wide input with #0a0a0a background, 1px #27272a border, 6px radius, 12px × 16px padding. Placeholder 'Search collections' in #6c6c6c, 14px Geist Mono. Search icon left-aligned in #9d9d9d.
+### 間隔とレイアウト
 
-### Time-Range Pill Selector
-**Role:** Compact filter for time windows on tables and charts
+| トークン | 値 |
+|---|---|
+| `--space-1` | `8px` |
+| `--space-2` | `16px` |
+| `--space-3` | `24px` |
+| `--page-max` | `1240px` |
 
-Row of 5 small pills: 1h, 6h, 24h, 7d, 30d. Default text #9d9d9d on transparent. Active pill has #27272a background with #ffffff text. 6px radius, compact 4px×8px padding, 12px Geist Mono.
+`--page-max` は `.site-inner` `.gnav-inner` `.wrap` の3か所で使う。この3つが
+同じ最大幅を共有することで、ヘッダのロゴ・ナビ・本文の左端が一直線に揃う。
 
-### Brand Logo Card (Trusted By Grid)
-**Role:** Partner/brand showcase tiles
+### 書体
 
-2-row × 6-column grid of square tiles on #0a0a0a with 1px #27272a border, 12px radius. Logo centered in #ffffff. Logos vary from wordmarks to icon marks (base, Barbie, Paris Saint-Germain, Ubisoft, FOX Deportes, rekt, UFC, Universal, Hot Wheels, Ledger).
+```css
+--font-ui: "Meiryo", "メイリオ", "Hiragino Sans", "Yu Gothic UI",
+           Arial, Verdana, sans-serif;
+```
 
-### News Post Card
-**Role:** Content card linking to blog posts and insights
+参考サイトに合わせてメイリオを先頭に置く。**Webフォントは読み込まない。**
+本文がほぼ日本語なので端末に入っている書体で足り、欧文フォントのためだけに
+通信を増やす理由がない（`web/app/layout.tsx` のコメント）。
 
-Horizontal layout: left thumbnail with colored 3D illustration, center title in 18px Tomorrow #ffffff with category tag ('INSIGHTS') in 12px Geist Mono #9d9d9d, right 'PFP PLAYBOOK' callout in #faff00. 12px card radius, hairline border.
+日本語の本文が主体なので等幅にはしない。**桁を揃える必要がある数値だけ `.num` で
+`font-variant-numeric: tabular-nums` にする。**
 
-### Crypto Ticker (Footer)
-**Role:** Live crypto price display in the footer bar
+| 役割 | サイズ | 太さ |
+|---|---|---|
+| `body` | 14px / 1.5 | 400 |
+| `h1` | 30px / 1.3 | 700 |
+| `h2` | 16px | 700 |
+| `h3` | 13px | 700 |
+| `.sub` | 13px | 400 |
+| `.crumb` `.legend` `.inset` | 12px | 400 |
+| `table` | 12px | 400 |
+| `th` | 11px | 700 |
 
-Inline pill showing USD price and ETH price for $RARI. Right-aligned in the footer, 12px Geist Mono, with colored dot indicators (#faff00 for active).
+## コンポーネント
 
-### Footer Bar
-**Role:** Site-wide footer with legal and links
+### ヘッダ `.site` / `.site-inner` / `.site-logo`
 
-Full-width dark bar (#0a0a0a) with 1px top border in #27272a. Left: copyright '© Rarible, Inc.' + Terms, Privacy, API in 12px Geist Mono #6c6c6c. Right: USD/Crypto toggle, price ticker, Community link.
+下端に1pxの罫線。ロゴは18px太字で、左に `--accent-bar` の5px縦罫を立てる。
+この縦罫は `h1` と同じ形で、サイト名と本文見出しを同じ記号で結びつけている。
 
-## Do's and Don'ts
+### グローバルナビ `.gnav` / `.gnav-inner`
 
-### Do
-- Use #faff00 exclusively for the single primary action and active/selected states — one CTA per screen, no competing colored buttons.
-- Set all UI text, table data, and button labels in Geist Mono 400/500 to preserve the terminal character; switch to Tomorrow only for section headings and display titles.
-- Separate surfaces with 1px #27272a hairline borders rather than shadows — the design is deliberately flat, relying on line weight for hierarchy.
-- Keep gaps tight: 8px between related elements, 16px within cards, 32px between sections. The page is data-dense, not airy.
-- Use 6px radius for buttons, inputs, and thumbnails; 12px for cards and larger containers; 9999px only for pill toggles and chain selectors.
-- Right-align all numeric data in tables and use #faff00 for positive percentage changes, a muted/pink tone for negative — color encodes data, not decoration.
-- Default to #0a0a0a for both the page canvas and card surfaces; differentiate with border alone or step up to #18181b for interactive states.
+全幅の金の帯。項目を `flex: 1` で等幅に並べ、`rgba(0, 0, 0, 0.16)` の細い縦罫で
+区切る。文字は `--accent-ink`（黒）。現在地は `aria-current="page"` で示し、
+白を32%重ねて太字にする。現在地の判定にパスが要るので `SiteNav` だけが
+クライアントコンポーネントになっている。レース詳細は一覧の下位なので、
+`/race/...` でも「レース一覧」を現在地として扱う。
 
-### Don't
-- Don't introduce a second accent color — the entire palette is monochrome with one chartreuse voice. Adding blue, red, or purple dilutes the identity.
-- Don't apply drop shadows to cards, modals, or popovers. The system uses flat surfaces with hairline borders; elevation comes from layering, not blur.
-- Don't use rounded corners above 12px on rectangular components — large radii break the technical, trading-desk feel.
-- Don't set body text in a proportional sans-serif. Geist Mono is the identity; substituting Inter or system-ui erases the marketplace's distinctive character.
-- Don't fill buttons with white or gray when you mean 'primary action' — only #faff00 communicates primary. Use ghost (transparent + border) for secondary.
-- Don't add gradients, glassmorphism, or decorative backgrounds to content areas. The canvas is always flat #0a0a0a.
-- Don't use color to indicate hover on text links — rely on underline or a subtle weight/color shift to #faff00, not background fills on inline text.
+### 本文枠 `.wrap` / `.crumb`
 
-## Surfaces
+`.wrap` は `--page-max` で中央寄せし、下に 64px の余白を取る。
+`.crumb` はパンくず。12px、`--text-muted`。
 
-| Level | Name | Value | Purpose |
-|-------|------|-------|---------|
-| 0 | Page Canvas | `#0a0a0a` | Full-page background behind all content |
-| 1 | Card / Table Surface | `#0a0a0a` | Cards and table rows share the canvas color, differentiated only by hairline borders |
-| 2 | Interactive Surface | `#18181b` | Button hover/active states and secondary elevated panels |
+### 見出し
 
-## Elevation
+`h1` は `--accent-bar` の5px縦罫つき。`h3` は下に `2px solid var(--grid)` を敷く。
+カード内の小見出しはすべて `h3`。
 
-- **Input fields and buttons (subtle resting shadow):** `0px 1px 2px 0px rgba(0, 0, 0, 0.05)`
+### `.notice`
 
-## Imagery
+左に `--warning` の5px縦罫、地は `--surface-2`。前提を伝える箱。
+市場勝率の但し書きや標本サイズの注意に使う。エラーではないので `--critical` は使わない。
 
-Imagery is collection-driven: each NFT thumbnail is the hero of its card, with no lifestyle framing or context shots. Collection art varies wildly — 3D character renders (VeeFriends penguins, Pudy Penguins), abstract 3D shapes (Chromie Squiggle), flat illustrated icons, and photographic art — presented as tight square crops with no padding or shadow. Brand logos in the 'Trusted by' grid are rendered as flat white marks on the dark canvas, treating partner identities as uniform. A single news thumbnail uses a vivid magenta/pink illustration as visual contrast. The overall image strategy is 'show the asset, not the gallery': thumbnails sit edge-to-edge in their tiles, and the marketplace never editorializes the art with captions or descriptions on the index.
+### `.card`
 
-## Layout
+**角丸も影も使わない。** 地は `--surface-1`、枠は `1px solid var(--grid)`、
+内側は `12px 14px`。危険を示すときだけ枠色を差し替える
+（`ErrorCard` は `--critical`、`about` の予測モデル節は `--warning`）。
 
-Page layout is full-width and centered within a ~1440px max-width, with all content left-aligned to a consistent gutter. The hero is a single full-width featured collection banner, followed by a 6-column horizontal card grid (horizontally scrollable on narrow viewports), then a full-width trending data table, then a 6×2 brand-logo grid, and a 2-column news section. Section rhythm is consistent: each block is separated by ~32px vertical gap with no alternating background colors — the entire page is one continuous #0a0a0a canvas. Navigation is a sticky top bar with a secondary chain-filter row directly beneath it. Content density is high: tables pack 10+ rows above the fold, and card grids show 6 items per row without generous padding.
+### `.inset` / `.scroll-x`
 
-## Agent Prompt Guide
+`.inset` は `--surface-2` に1px罫線の沈んだ箱。エラーメッセージの原文など、
+地の文と混ぜたくないものを入れる。`.scroll-x` は `overflow-x: auto` だけ。
+**幅の広い表とコードブロックは必ず `.scroll-x` で包む。**
 
-primary action: #faff00 (filled action)
-Create a Primary Action Button: #faff00 background, #000000 text, 9999px radius, compact pill padding. Use this filled treatment for the main CTA.
+### 表 `table` / `th` / `td`
 
-## Similar Brands
+参考サイトに合わせて**全セルに罫線**を引き、ヘッダに `--surface-2` を敷く。
+既定は中央揃え・`white-space: nowrap`。左揃えにしたい列だけ `.l` を付ける。
 
-- **OpenSea** — Same dark-canvas NFT marketplace layout with full-width data tables, collection card grids, and a high-density browse experience
-- **Blur** — Matching dark-mode trading-desk aesthetic with monospaced data, compact tables, and a single vivid accent color for active states
-- **Magic Eden** — Dark background with grid-based collection browsing, flat cards, and hairline-bordered tables for floor prices and volume
-- **Uniswap** — Similar dark crypto-tool vocabulary — dense data tables, monospaced numeric alignment, and minimal decorative chrome
-- **Zora** — Same creator-marketplace atmosphere with dark canvas, collection thumbnails as the dominant visual unit, and tabular data over decorative imagery
+- `.num` — 桁を揃える数値
+- `td.best` — 列の中で最も良い値。**色は足さず太さだけで差をつける。**
+  10列の数字が均一に並ぶと、どこを見ればよいか手がかりが無いため。
+  すでに艇色と系列色があるので、ここに3つ目の色を持ち込まない
+- `tr.lane-N td` — 艇ごとに行を `--lane-N-tint` で淡く着色する
+- `.upcoming td.time` — 締切一覧は時刻を最初に置いて縦に読ませる。13px太字
 
-## Quick Start
+### タブ `.tabs`
 
-### CSS Custom Properties
+参考サイトの開催場・レース選択と同じ形。四角い枠を隙間なく並べ、
+選択中だけ `--accent-bar` にベタ塗りして `--accent-ink` の太字で反転させる。
+`.tabs-label` は帯の先頭に置く見出しで、`--surface-3` を敷いて操作できないことを示す。
+日付ナビ（`DateNav`）がこの形を使い、日付が1つ以下のときは何も描かない。
+
+### 配置 `.grid2` / `.venue-grid` / `.race-links`
+
+| クラス | 定義 | 用途 |
+|---|---|---|
+| `.grid2` | `auto-fit, minmax(300px, 1fr)` | チャート2枚を横並べ |
+| `.venue-grid` | `auto-fill, minmax(240px, 1fr)` | 開催場カードの一覧 |
+| `.race-links` | `flex` + `gap: 4px` | 1R〜12Rへの四角いリンク |
+
+`.race-links a` は最小幅 40px の四角。ホバーで枠と文字が `--accent` に変わる。
+確定した1着艇がいるレースだけ、番号の右に `LaneBadge` を並べる。
+**チップは確定した1着だけに使う。** 予想と結果を同じ形で出すと、
+締切前のレースで予想を結果として読まれる。
+
+### `LaneBadge`
+
+正方形のチップ。`size` で一辺（既定 20px）、文字は `size * 0.6` の太字。
+`aria-label` に「N号艇」を持たせる。**角丸を持たせない**（参考サイトの車番表示に合わせる）。
+使われているサイズは 14 / 16 / 18 / 20 の4つ。
+
+### `ProbBars`（Bars.tsx）
+
+艇別の大小比較。単一系列なので凡例は置かず、`--seq-mid` 1色で塗る。
+`emphasize` に艇番を渡した艇だけ `--seq-strong` になる。
+トラックは `--grid`、高さ 14px、角丸なし。**6本すべてに値を直接書く**ので、
+ホバーに頼らずに読める。値が無い艇は「—」を `--text-muted` で出し、行は残す。
+
+### `DivergingBars`（Bars.tsx）
+
+コース標準からの乖離。正負の極性を持つので発散型で描く。中央が「標準どおり」、
+右（`--div-pos`、青）が市場の高評価、左（`--div-neg`、赤）が低評価。
+中央に `--axis` のゼロ基準線を1px立てる。地は `--div-mid`。
+市場が1号艇以外を本命視しているレースが一目で分かる。
+
+### `DotPlot`
+
+**狭い範囲に密集した値には棒グラフを使わない。** 展示タイムは6艇が0.1秒程度の幅に
+収まる。これを棒にすると基準を任意にずらすことになり、わずかな差が棒の長さの
+何倍もの差に見えてしまう。共通の軸に点を置けば、差の実際の小ささがそのまま伝わる。
+
+- 点は直径10px、既定 `--seq-mid`、最良値だけ `--seq-strong`
+- 点の周りに `--surface-1` の2pxリングを置く。重なっても輪郭が消えないため
+- 軸の両端に値域の15%ずつ余白を取り、点が枠に貼りつかないようにする
+- **軸の下に実レンジと幅を必ず併記する。** これが無いと点の位置だけでは
+  差の大きさが分からない
+
+### `ErrorCard`
+
+データ層の不調でページ全体を500にすると、利用者には何も伝わらず、
+運用側も本番ログを見に行くまで原因が分からない。落とさずに画面へ出す。
+枠と見出しを `--critical`、原文は `.scroll-x .inset` の `<pre>` に入れる。
+**表示するのはエラーメッセージだけで、接続情報や鍵は含めない。**
+
+## やること
+
+- 面の区別は1pxの `--grid` 罫線で作る。角丸と影は使わない
+- 数値を並べるときは `.num` を付ける
+- 幅の広い表は `.scroll-x` で包む
+- 強調は色ではなく太字（`td.best`）から先に試す
+- 金の帯の上での状態表現は白を重ねる
+- 値の無いセルは行を消さず「—」を `--text-muted` で出す
+
+## やらないこと
+
+- **艇色をチャートの塗りに使わない。** 白と黒が入っているため
+- **アクセントの金をデータの色に使わない。** 操作とデータの区別が消える
+- **`--accent-bar` の上に白文字を置かない。** 2.36:1
+- **状態色（`--good` `--warning` `--critical`）を系列色に転用しない**
+- **参考サイトの色をコントラストを測らずに写さない。** `#959595` は 2.9:1 だった
+- **Webフォントを読み込まない**
+- **密集した値を棒グラフで描かない。** `DotPlot` を使う
+- **購入を促す表現・的中率や収益性の訴求を入れない**（README.md「表現に関する注意」）
+- **較正前の期待値（EV）を画面に出さない。** `db/schema.sql` のRLSでも制約している
+
+## `:root` の全文
 
 ```css
 :root {
-  /* Colors */
-  --color-highlighter-lime: #faff00;
-  --color-onyx-black: #0a0a0a;
-  --color-zinc-hairline: #27272a;
-  --color-carbon: #18181b;
-  --color-pure-white: #ffffff;
-  --color-steel-gray: #9d9d9d;
-  --color-ash-gray: #6c6c6c;
-  --color-smoke: #3b3b3b;
+  color-scheme: light;
 
-  /* Typography — Font Families */
-  --font-geist-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --font-tomorrow: 'Tomorrow', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --page: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f4f3f3;
+  --surface-3: #f1f0f0;
 
-  /* Typography — Scale */
-  --text-caption: 10px;
-  --leading-caption: 1;
-  --text-body: 14px;
-  --leading-body: 1.43;
-  --text-subheading: 18px;
-  --leading-subheading: 1.4;
-  --text-heading: 24px;
-  --leading-heading: 1.29;
-  --text-heading-lg: 28px;
-  --leading-heading-lg: 1.17;
+  --text-primary: #373737;
+  --text-secondary: #5f5f5f;
+  --text-muted: #6e6e6e;
+  --grid: #dddddd;
+  --axis: #bdbdbd;
 
-  /* Typography — Weights */
-  --font-weight-regular: 400;
-  --font-weight-medium: 500;
+  --accent: #8f7219;
+  --accent-bar: #c9a52e;
+  --accent-ink: #373737;
 
-  /* Spacing */
-  --spacing-unit: 8px;
-  --spacing-8: 8px;
-  --spacing-16: 16px;
-  --spacing-24: 24px;
-  --spacing-32: 32px;
-  --spacing-40: 40px;
-  --spacing-48: 48px;
+  --seq-strong: #1c61ad;
+  --seq-mid: #6d9bc4;
+  --seq-weak: #d6e4f2;
 
-  /* Layout */
-  --page-max-width: 1440px;
-  --section-gap: 32px;
-  --card-padding: 16px;
-  --element-gap: 8px;
+  --div-pos: #1c61ad;
+  --div-neg: #c1272d;
+  --div-mid: #ebeaea;
 
-  /* Border Radius */
-  --radius-md: 6px;
-  --radius-xl: 12px;
-  --radius-full: 9999px;
+  --good: #1c8f3c;
+  --warning: #e08b00;
+  --critical: #c62828;
 
-  /* Named Radii */
-  --radius-cards: 12px;
-  --radius-pills: 9999px;
-  --radius-images: 6px;
-  --radius-inputs: 6px;
-  --radius-buttons: 6px;
+  --lane-1-bg: #ffffff;  --lane-1-fg: #373737;  --lane-1-br: #999999;
+  --lane-2-bg: #1a1a1a;  --lane-2-fg: #ffffff;  --lane-2-br: #1a1a1a;
+  --lane-3-bg: #e02020;  --lane-3-fg: #ffffff;  --lane-3-br: #e02020;
+  --lane-4-bg: #1560d0;  --lane-4-fg: #ffffff;  --lane-4-br: #1560d0;
+  --lane-5-bg: #f5c518;  --lane-5-fg: #373737;  --lane-5-br: #d9ac12;
+  --lane-6-bg: #149d4e;  --lane-6-fg: #ffffff;  --lane-6-br: #149d4e;
 
-  /* Shadows */
-  --shadow-subtle: rgba(0, 0, 0, 0.05) 0px 1px 2px 0px;
-  --shadow-subtle-2: rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px;
+  --lane-1-tint: #fafafa;
+  --lane-2-tint: #f0f0f0;
+  --lane-3-tint: #fdecec;
+  --lane-4-tint: #e9f1fc;
+  --lane-5-tint: #fdf7e2;
+  --lane-6-tint: #e9f6ee;
 
-  /* Surfaces */
-  --surface-page-canvas: #0a0a0a;
-  --surface-card-table-surface: #0a0a0a;
-  --surface-interactive-surface: #18181b;
-}
-```
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
 
-### Tailwind v4
+  --page-max: 1240px;
 
-```css
-@theme {
-  /* Colors */
-  --color-highlighter-lime: #faff00;
-  --color-onyx-black: #0a0a0a;
-  --color-zinc-hairline: #27272a;
-  --color-carbon: #18181b;
-  --color-pure-white: #ffffff;
-  --color-steel-gray: #9d9d9d;
-  --color-ash-gray: #6c6c6c;
-  --color-smoke: #3b3b3b;
-
-  /* Typography */
-  --font-geist-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --font-tomorrow: 'Tomorrow', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-
-  /* Typography — Scale */
-  --text-caption: 10px;
-  --leading-caption: 1;
-  --text-body: 14px;
-  --leading-body: 1.43;
-  --text-subheading: 18px;
-  --leading-subheading: 1.4;
-  --text-heading: 24px;
-  --leading-heading: 1.29;
-  --text-heading-lg: 28px;
-  --leading-heading-lg: 1.17;
-
-  /* Spacing */
-  --spacing-8: 8px;
-  --spacing-16: 16px;
-  --spacing-24: 24px;
-  --spacing-32: 32px;
-  --spacing-40: 40px;
-  --spacing-48: 48px;
-
-  /* Border Radius */
-  --radius-md: 6px;
-  --radius-xl: 12px;
-  --radius-full: 9999px;
-
-  /* Shadows */
-  --shadow-subtle: rgba(0, 0, 0, 0.05) 0px 1px 2px 0px;
-  --shadow-subtle-2: rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px;
+  --font-ui: "Meiryo", "メイリオ", "Hiragino Sans", "Yu Gothic UI",
+             Arial, Verdana, sans-serif;
 }
 ```
