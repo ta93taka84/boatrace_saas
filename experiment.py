@@ -183,11 +183,104 @@ FEATURES_ALL = FEATURES_CURRENT + [
 FEATURES_TODAY = FEATURES_CURRENT + ["exhibit"]
 FEATURES_TODAY_FULL = FEATURES_ALL + ["exhibit", "tilt", "wind_inner", "wave_inner"]
 
+# 節間の履歴から作る特徴量。attach_history が各艇に書き込む。
+#
+# READMEは市場オッズとの残り0.10の差を「節間成績や選手の直近の調子など、
+# まだ集めていない情報」に見ている。出走表の勝率や平均STは期別の集計なので、
+# 節に入ってからの調子は映さない。ここはそれを直接測る。
+#
+# **1,236レース(9日分)では効かなかった。配備してはいけない。**
+#
+# 検証612レースで「ロジット+当日全部」との差は -0.0021 ± 0.0012 で
+# 誤差の範囲。それ以上に、分割位置を5通り変えると符号が反転する。
+#
+#   20260827  +0.0059 ± 0.0022  悪化      ← 符号が逆
+#   20260828  +0.0011 ± 0.0009  誤差の範囲
+#   20260829  -0.0021 ± 0.0012  誤差の範囲
+#   20260830  -0.0051 ± 0.0027  誤差の範囲
+#   20260831  -0.0018 ± 0.0048  誤差の範囲
+#
+# 窓幅も2/3/4/6/10走を試したが、効果は -0.002〜-0.005 で、広げるほど
+# 小さくなる。本当に信号があるなら逆に大きくなるはずで、この振る舞いは
+# 信号ではなくノイズを拾っていることを示唆する。単独では recent_rank だけが
+# -0.0027 ± 0.0008 で基準を通るが、これも分割位置には耐えていない。
+# 窓と特徴量の組み合わせを10通り以上試しているので、多重比較のぶん
+# 一番良いものが偶然通る確率も上がっている。
+#
+# 効かない理由はデータ量だと考えられる。9日分では1艇あたりの過去走が
+# 中央値3走しかなく、16.5%は過去走ゼロ、4走の窓を満たすのは40%だけ。
+# 「節間の調子」を測るには節が短すぎる。データが増えたら
+# rolling_check_history() を回して再判断すること。
+FEATURES_HISTORY = FEATURES_TODAY_FULL + ["recent_st", "recent_rank", "course_shift"]
+
 # 0が「欠損」ではなく正当な値である特徴量。
 # F回数0は「フライング歴が無い」という情報であって、欠測ではない。
 # ここを取り違えると、きれいな選手が全員「平均並み」に潰れて信号が消える。
 # 風と波の交互作用も、内枠以外は定義上0になる。
-ZERO_IS_VALID = {"tilt", "f_count", "l_count", "wind_inner", "wave_inner"}
+ZERO_IS_VALID = {"tilt", "f_count", "l_count", "wind_inner", "wave_inner",
+                 "course_shift"}
+
+
+HISTORY_WINDOW = 4
+
+
+def attach_history(rows, window: int = HISTORY_WINDOW):
+    """
+    各艇に、そのレースより前の走りから作った特徴量を書き込む。
+
+    **対象レースより厳密に前の走りだけを使う。** 特徴量を計算してから
+    そのレースの結果を履歴へ積む、という順にしてあるので、自分の結果が
+    自分の特徴量に入ることは構造的に起きない。
+
+    順序は (日付, レース番号)。選手は1日に1場しか出ないので、
+    この並びは選手ごとの時系列と一致する。場をまたいだ同時刻の
+    レース同士の前後は入れ替わりうるが、同じ選手が両方に出ることは
+    無いので履歴には影響しない。
+
+    書き込む特徴量（いずれも大きいほど有利になる向きに符号を揃える）:
+      recent_st    直近window走の平均ST。小さいほど良いので反転する。
+                   出走表の avg_st は期別の集計なので、節に入ってからの
+                   調子は映さない。こちらはそれを直接見る。
+      recent_rank  直近window走の平均着順。小さいほど良いので反転する。
+      course_shift 枠番から実際の進入コースへどれだけ内に入ったかの平均。
+                   正なら前づけする選手。0は「動かない」で、これは
+                   欠損ではなく正当な値なので ZERO_IS_VALID に入れてある。
+                   履歴が無い選手も0になるが、枠なりが最頻なので
+                   既定値として妥当。
+    """
+    order = sorted(rows, key=lambda r: (r["date"], r["race_no"]))
+    hist: dict[str, list] = {}
+
+    for row in order:
+        start = {s["lane"]: s for s in (row.get("start") or [])}
+        # JSONを往復すると艇番のキーが文字列になる
+        finish = {int(k): v for k, v in (row.get("finish") or {}).items()}
+
+        for r in row["racers"]:
+            past = hist.get(r.get("racer_id")) or []
+            recent = past[-window:]
+            # フライングのSTは平均から外す。負の値で持っているので、
+            # 符号を反転して「大きいほど良い」に揃えると、失格した走りが
+            # 最良のSTに化ける。実測で24件あり、数は少ないが向きが逆になる。
+            sts = [p["st"] for p in recent if p["st"] is not None and not p["flying"]]
+            ranks = [p["rank"] for p in recent if p["rank"] is not None]
+            shifts = [p["shift"] for p in recent if p["shift"] is not None]
+            r["hist_n"] = len(past)
+            r["recent_st"] = -(sum(sts) / len(sts)) if sts else 0.0
+            r["recent_rank"] = -(sum(ranks) / len(ranks)) if ranks else 0.0
+            r["course_shift"] = (sum(shifts) / len(shifts)) if shifts else 0.0
+
+        # ここで初めて今回の結果を積む。上の計算より後に置くことが要点。
+        for r in row["racers"]:
+            s = start.get(r["lane"])
+            hist.setdefault(r.get("racer_id"), []).append({
+                "st": s["st"] if s else None,
+                "flying": bool(s["flying"]) if s else False,
+                "shift": (r["lane"] - s["course"]) if s else None,
+                "rank": finish.get(r["lane"]),
+            })
+
+    return rows
 
 
 def _raw_feature(r, name, row):
@@ -400,11 +493,50 @@ def rolling_check(rows, names, ref_fn, label):
     print()
 
 
+def rolling_check_history(rows, label="ロジット+履歴 vs ロジット+当日全部"):
+    """
+    履歴を足した効果を、分割位置を変えて確認する。
+
+    rolling_check と違い、比較相手も各分割で当てはめ直す。履歴の有無だけを
+    変えた2つのモデルを、同じ学習データから作って同じ検証データで比べないと、
+    差が「履歴の効果」なのか「学習量の違い」なのか分からない。
+
+    2026年9月時点（1,236レース）では符号が反転する。最も古い分割位置では
+    有意に悪化する。この不安定さが見えないと、たまたま良く出た分割位置だけを
+    見て採用してしまう。
+    """
+    dates = sorted({r["date"] for r in rows})
+    print(f"--- {label}: 分割位置を変えた再確認 ---")
+    print(f"  {'分割日':<10} {'学習':>8} {'検証':>8} {'差':>9} {'±SE':>8} {'判定':>10}")
+    print("  " + "-" * 58)
+    for cut in range(2, len(dates)):
+        train = [r for r in rows if r["date"] < dates[cut]]
+        test = [r for r in rows if r["date"] >= dates[cut]]
+        if len(train) < 150 or len(test) < 150:
+            continue
+        a = make_logit(fit_logit(train, FEATURES_HISTORY))
+        b = make_logit(fit_logit(train, FEATURES_TODAY_FULL))
+        diff, se, n = paired_diff(test, a, b)
+        if se == 0:
+            continue
+        verdict = "改善" if diff < -2 * se else ("悪化" if diff > 2 * se else "誤差の範囲")
+        print(f"  {dates[cut]:<10} {len(train):>8} {len(test):>8} "
+              f"{diff:>+9.4f} {se:>8.4f} {verdict:>10}")
+    print("  符号が分割位置で反転するなら、それは信号ではない。")
+    print()
+
+
 def main():
     rows = load()
     if not rows:
         print("データがありません。backtest.py collect を先に実行してください。")
         return
+
+    # 節間の履歴を各艇に付ける。分割の前に付けてよい。対象レースより
+    # 厳密に前の走りしか見ないので、検証側の行が学習側の特徴量に
+    # 混ざることは無い。
+    attach_history(rows)
+    _history_coverage(rows)
 
     train, test = split_by_date(rows)
     print(f"全{len(rows)}レース (学習{len(train)} / 検証{len(test)})\n")
@@ -415,10 +547,12 @@ def main():
     m_all = fit_logit(fit_rows, FEATURES_ALL)
     m_today = fit_logit(fit_rows, FEATURES_TODAY)
     m_full = fit_logit(fit_rows, FEATURES_TODAY_FULL)
+    m_hist = fit_logit(fit_rows, FEATURES_HISTORY)
     report_coefficients(m_cur, "ロジット(現行特徴)")
     report_coefficients(m_all, "ロジット(全特徴)")
     report_coefficients(m_today, "ロジット+展示")
     report_coefficients(m_full, "ロジット+当日全部")
+    report_coefficients(m_hist, "ロジット+履歴")
 
     candidates = {
         "市場オッズ":            market,
@@ -434,6 +568,7 @@ def main():
         "ロジット(全特徴)":       make_logit(m_all),
         "ロジット+展示":          make_logit(m_today),
         "ロジット+当日全部":       make_logit(m_full),
+        "ロジット+履歴":          make_logit(m_hist),
     }
 
     if not test:
@@ -447,7 +582,29 @@ def main():
     _table(test, candidates, f"検証 {len(test)}レース (こちらで判断する)")
     rolling_check(rows, FEATURES_TODAY_FULL,
                   make_model(w_class=1.0, w_venue=0.5), "ロジット+当日全部 vs 本番モデル")
+    rolling_check_history(rows)
     _noise_note(len(test))
+
+
+def _history_coverage(rows):
+    """
+    履歴がどれだけ積み上がっているかを出す。
+
+    これが薄いと、履歴特徴量が効かなくても「情報が無いのか、情報に
+    価値が無いのか」を区別できない。解釈のために必ず先に見る。
+    """
+    counts = [r.get("hist_n", 0) for row in rows for r in row["racers"]]
+    if not counts:
+        return
+    counts.sort()
+    n = len(counts)
+    zero = sum(1 for c in counts if c == 0)
+    print(f"[節間履歴] 延べ{n}艇 / 過去走が無い艇 {zero} ({zero/n*100:.1f}%)")
+    print(f"           平均 {sum(counts)/n:.2f}走  中央値 {counts[n//2]}走  "
+          f"最大 {counts[-1]}走")
+    enough = sum(1 for c in counts if c >= HISTORY_WINDOW)
+    print(f"           窓({HISTORY_WINDOW}走)を満たす艇 {enough} ({enough/n*100:.1f}%)")
+    print()
 
 
 def _table(rows, candidates, label):

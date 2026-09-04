@@ -94,6 +94,7 @@ def _build_row(date_str, venue, rno):
         "trifecta_payout": result["payouts"].get("3連単", {}).get("payout"),
         "kimarite": result.get("kimarite"),
         "start": result.get("start"),
+        "finish": result.get("finish"),
     }
 
 
@@ -430,8 +431,8 @@ def backfill_start():
     スタート展示のほうは締切前に分かるので、予測の特徴量にできる。
     """
     rows = [json.loads(l) for l in DATASET.read_text(encoding="utf-8").splitlines() if l.strip()]
-    todo = [r for r in rows if r.get("start") is None]
-    print(f"{len(rows)}件のうち {len(todo)}件にスタート情報を付ける（キャッシュのみ）")
+    todo = [r for r in rows if r.get("start") is None or r.get("finish") is None]
+    print(f"{len(rows)}件のうち {len(todo)}件にスタート情報と着順を付ける（キャッシュのみ）")
 
     got_start = got_ex = miss_start = miss_ex = 0
     for row in todo:
@@ -440,6 +441,9 @@ def backfill_start():
         html = cached("/owpc/pc/race/raceresult", result_params(*key))
         parsed = parse_result(html, row["race_no"]) if html else None
         row["start"] = (parsed or {}).get("start") or []
+        # 着順は勝者だけでなく全艇ぶん要る。直近の調子を「勝ったかどうか」
+        # だけで測ると、6艇中1艇しか当たりが無いので情報がほとんど残らない。
+        row["finish"] = (parsed or {}).get("finish") or {}
         if row["start"]:
             got_start += 1
         else:
@@ -458,7 +462,8 @@ def backfill_start():
     print(f"スタート展示  : {got_ex}件 付与 / {miss_ex}件 はキャッシュに無し")
     total_start = sum(1 for r in rows if r.get("start"))
     total_ex = sum(1 for r in rows if r.get("start_exhibition"))
-    print(f"保有状況      : 本番 {total_start}/{len(rows)} / 展示 {total_ex}/{len(rows)}")
+    total_fin = sum(1 for r in rows if r.get("finish"))
+    print(f"保有状況      : 本番 {total_start}/{len(rows)} / 展示 {total_ex}/{len(rows)} / 着順 {total_fin}/{len(rows)}")
 
 
 def _write_all(rows):
