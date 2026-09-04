@@ -90,6 +90,8 @@ jobs:
       - name: どのジョブを走らせるか決める
         id: pick
         run: |
+          # 連鎖の暴走を防ぐため、このジョブが何秒走ったかを後で測る
+          echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
             echo "until=${{ inputs.until }}" >> "$GITHUB_OUTPUT"
@@ -179,6 +181,66 @@ jobs:
           path: output/
           retention-days: 7
           if-no-files-found: ignore
+
+      # 次の prerace-loop を自分で予約する。
+      #
+      # GitHubのcronは実測で1日2〜3回しか発火せず、しかも発火するのは常に
+      # morning と results の枠だった。prerace-loop に割り当てた3本は
+      # 3日間で一度も発火していない。cronの本数を増やしても発火数は増えない。
+      #
+      # そこで、確実に発火している1回を起点にして、以降は各実行が次を予約する
+      # 形にする。これで cron への依存は「1日どこかで1回発火すること」だけになる。
+      #
+      # GITHUB_TOKEN では workflow_dispatch を起こせない（無限再帰を防ぐための
+      # GitHubの仕様）ので、Actionsの書き込み権限を持つ PAT を DISPATCH_TOKEN
+      # に入れる必要がある。未設定なら何もしない＝従来どおりcron頼みになる。
+      #
+      # 暴走への歯止めを3つ置いている。連鎖する仕組みは、失敗が高速で
+      # 繰り返されると実行時間と公式サイトへの負荷を際限なく使うため。
+      #   - 開催時間帯（09:00〜21:40）の外では予約しない
+      #   - results からは予約しない（その日の最後のジョブなので）
+      #   - 10分未満で終わった実行からは予約しない。すぐ落ちる状態で
+      #     連鎖すると、1分ごとに起動を繰り返すことになる
+      - name: 次のループを予約する
+        if: always() && steps.pick.outputs.job != 'results'
+        env:
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "DISPATCH_TOKEN が未設定のため予約しない（cron頼みのまま）"
+            exit 0
+          fi
+
+          ELAPSED=$(( $(date +%s) - ${{ steps.pick.outputs.started }} ))
+          if [ "$ELAPSED" -lt 600 ]; then
+            echo "この実行は${ELAPSED}秒で終わっている。異常の疑いがあるので予約しない"
+            exit 0
+          fi
+
+          NOW=$(date +%H%M)
+          if [ "$NOW" -lt 900 ] || [ "$NOW" -ge 2140 ]; then
+            echo "開催時間帯の外（現在 $NOW）なので予約しない"
+            exit 0
+          fi
+
+          # 次の終了時刻は「今から5時間20分後」と 21:40 の早いほう。
+          # 1ジョブの上限が6時間なので、準備の時間を見て5時間20分に抑える。
+          NEXT=$(date -d '+5 hours 20 minutes' +%H:%M)
+          NEXTN=$(echo "$NEXT" | tr -d ':')
+          if [ "$NEXTN" -ge 2140 ] || [ "$NEXTN" -lt "$NOW" ]; then
+            NEXT=21:40
+          fi
+
+          echo "次の prerace-loop を予約する（終了 $NEXT）"
+          CODE=$(curl -sS -o /tmp/dispatch.json -w '%{http_code}' -X POST             -H "Authorization: Bearer $DISPATCH_TOKEN"             -H "Accept: application/vnd.github+json"             "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/collect.yml/dispatches"             -d "{\"ref\":\"main\",\"inputs\":{\"job\":\"prerace-loop\",\"until\":\"$NEXT\"}}")
+
+          # 予約に失敗すると、その日の残りが黙って収集されないまま終わる。
+          # トークンの期限切れが典型なので、必ず失敗として通知させる。
+          if [ "$CODE" != "204" ]; then
+            echo "次のループの予約に失敗した (HTTP $CODE)"
+            cat /tmp/dispatch.json
+            exit 1
+          fi
 
       # 失敗時だけ通知する。何も起きていないときに通知が来ないことが
       # 「1日5分で回す」運用の前提。
