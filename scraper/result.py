@@ -12,6 +12,7 @@ def get_result(date_str: str, venue_code: str, race_no: int) -> dict | None:
       "finish": {1: 1, 6: 2, 2: 3, 3: 4},   # 艇番 -> 着順
       "winner_lane": 1,
       "kimarite": "逃げ",
+      "start": [{"course": 1, "lane": 1, "st": 0.17, "flying": False}, ...],
       "payouts": {"3連単": {"combo": "1-6-2", "payout": 9480, "popularity": 29}, ...},
     }
     中止・不成立などで着順が取れない場合は None。
@@ -31,8 +32,47 @@ def get_result(date_str: str, venue_code: str, race_no: int) -> dict | None:
         "finish": finish,
         "winner_lane": winner_lane,
         "kimarite": _parse_kimarite(soup),
+        "start": _parse_start(soup),
         "payouts": _parse_payouts(soup),
     }
+
+
+def _parse_start(soup) -> list[dict]:
+    """
+    スタート情報（展開図）。進入コース順に艇番とSTが並ぶ。
+
+    戻り値: [{"course": 1, "lane": 1, "st": 0.17, "flying": False}, ...]
+
+    **枠番と進入コースは別物。** 前づけがあると一致せず、キャッシュ済みの
+    2,515レースで15.7%がそうだった。ここを取らないと「枠1＝1コース」という
+    誤った前提でしか扱えない。scoring.estimate_win_prob の actual_course は
+    この値のために用意されている。
+
+    表示の上から順に1コース、2コース…なので、順番そのものが進入コースになる。
+    欠場があるとその艇は並ばず、残った艇が上から詰めてコースを取る。
+
+    STは大時計が0になってから何秒後か。フライングは0より前なので負で返す。
+    'F.03' は0.03秒早いという意味なので -0.03。符号を落として 0.03 にすると、
+    最も良いSTと最も悪いSTが同じ値になる。
+    """
+    start = []
+    for course, div in enumerate(soup.select(".table1_boatImage1"), 1):
+        # 1着の枠だけ決まり手が同じ要素に入る（'1 .17 逃げ'）ので先頭だけ見る
+        m = re.match(r"^(\d)\s+(F?)\.(\d+)", div.get_text(" ", strip=True))
+        if not m:
+            continue
+        lane = int(m.group(1))
+        if not 1 <= lane <= 6:
+            continue
+        flying = m.group(2) == "F"
+        st = float("0." + m.group(3))
+        start.append({
+            "course": course,
+            "lane": lane,
+            "st": round(-st if flying else st, 2),
+            "flying": flying,
+        })
+    return start
 
 
 def _parse_finish(soup) -> dict[int, int]:
