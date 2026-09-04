@@ -184,8 +184,34 @@ async function listDatesFromFiles(): Promise<string[]> {
 async function getDayFromFile(date: string): Promise<DayData | null> {
   try {
     const raw = await fs.readFile(path.join(OUTPUT_DIR, `${date}.json`), "utf-8");
-    return JSON.parse(raw) as DayData;
+    return stripUncalibrated(JSON.parse(raw) as DayData);
   } catch {
     return null;
   }
+}
+
+/**
+ * 未較正の予測を落とす。
+ *
+ * DB経路は predictions.calibrated で門番を通し、schema.sql のRLSでも
+ * 未較正の行を返さないようにしてある。ファイル経路にはその門番が無く、
+ * JSONに入っているEVがそのまま画面まで届いていた。Supabaseの環境変数を
+ * 設定し忘れた状態がまさにこの経路なので、同じ門番をここにも置く。
+ *
+ * 較正が済むまでEVを出さないのはプロジェクトの決まり（CLAUDE.md）。
+ * jobs.py が各レースに calibrated を刻んでいる。印が無い古いファイルは
+ * 未較正として扱う。
+ */
+function stripUncalibrated(day: DayData): DayData {
+  for (const venue of day.venues ?? []) {
+    for (const race of venue.races ?? []) {
+      if (!(race as { calibrated?: boolean }).calibrated) {
+        delete race.model_prob;
+        delete race.ev;
+        delete race.top_lane;
+        delete race.top_ev;
+      }
+    }
+  }
+  return day;
 }
