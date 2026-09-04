@@ -349,6 +349,15 @@ def calibrate(start: str = None, end: str = None):
         print("       場別の推定は縮小推定でほぼ全場平均に寄っています。")
         print("       collect で日数を増やしてから再度 calibrate してください。")
 
+    # 配備側 scoring.estimate_win_prob はこのファイルがあると場別の基準率を
+    # オフセットに使う。一方 LOGIT_WEIGHTS を当てはめた experiment.py は
+    # 固定の COURSE_BASE を使っている。このファイルを書いた時点で、
+    # 「検証したモデル」と「配備されるモデル」の土台が入れ替わる。
+    print("\n[重要] このファイルを置くと、配備側のオフセットが場別の基準率に変わる。")
+    print("       LOGIT_WEIGHTS は固定の COURSE_BASE を土台に当てはめた係数なので、")
+    print("       検証したモデルと配備されるモデルが別物になる。")
+    print("       係数を当てはめ直して experiment.py で検証し直すこと。")
+
 
 
 BEFORE_KEYS = ("weather", "temperature", "water_temp",
