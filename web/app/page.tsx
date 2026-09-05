@@ -3,9 +3,18 @@ import { getDay, listDates } from "@/lib/data";
 import { LaneBadge } from "@/components/LaneBadge";
 import { DateNav } from "@/components/DateNav";
 import { ErrorCard } from "@/components/ErrorCard";
+import {
+  DIVERGING_SCALE,
+  MiniDivergingBar,
+  MiniDivergingScale,
+} from "@/components/Bars";
+import { COURSE_BASE, courseDeviation } from "@/lib/course";
 import type { Race } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+/** レース詳細の「コース標準との差」と同じ書式。同じ数字を同じ形で出す。 */
+const devFormat = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}pt`;
 
 /** 市場が最も高く評価している艇と、その確率。 */
 function marketTop(race: Race): { lane: number; prob: number } | null {
@@ -75,6 +84,12 @@ export default async function Home({
           .slice(0, 12)
       : [];
 
+  // 尺度(±30pt)の外まで届いている棒があるかどうか。あるときだけ矢羽根の説明を出す。
+  const anyDevOverflow = upcoming.some(({ race }) => {
+    const d = courseDeviation(race.market_prob, 1);
+    return d != null && Math.abs(d) > DIVERGING_SCALE;
+  });
+
   return (
     <main className="wrap">
       <p className="crumb">レース一覧</p>
@@ -103,14 +118,31 @@ export default async function Home({
               <thead>
                 <tr>
                   <th>締切</th>
-                  <th className="l">場</th>
+                  {/*
+                    余った横幅はこの列に吸わせる。そうしないと表の伸びが
+                    最後の乖離の列に配分され、棒と数値のまわりに
+                    数百pxの空白が空いて、棒が見出しから切り離されて見える。
+                  */}
+                  <th className="l" style={{ width: "100%" }}>場</th>
                   <th>レース</th>
-                  <th>市場本命</th>
+                  {/*
+                    狭い画面ではこの表は .scroll-x の中で横に流れる。差別化にあたる
+                    この列を市場評価1位より前に置いて、スクロールしなくても
+                    棒が視界に入るようにしている。
+                  */}
+                  <th>
+                    <MiniDivergingScale
+                      label="1号艇 コース標準との差"
+                      format={devFormat}
+                    />
+                  </th>
+                  <th>市場評価1位</th>
                 </tr>
               </thead>
               <tbody>
                 {upcoming.map(({ venue, race }) => {
                   const top = marketTop(race);
+                  const dev = courseDeviation(race.market_prob, 1);
                   return (
                     <tr key={`${venue.code}-${race.race_no}`}>
                       <td className="time num">{race.closes_at}</td>
@@ -119,6 +151,9 @@ export default async function Home({
                         <Link href={`/race/${day.date}/${venue.code}/${race.race_no}`}>
                           {race.race_no}R
                         </Link>
+                      </td>
+                      <td>
+                        <MiniDivergingBar value={dev} format={devFormat} />
                       </td>
                       <td>
                         {top ? (
@@ -138,12 +173,40 @@ export default async function Home({
               </tbody>
             </table>
           </div>
+
+          {/*
+            この列は誤読されやすい。乖離が大きいレースほど1号艇の1着率は
+            確かに下がるが、市場はその無秩序さを既に価格へ織り込んでいて、
+            高額配当の出やすさは層別してもほとんど動かない（1万円超の出現率は
+            19.1% → 14.7%）。だから「何が言えて、何が言えないか」を
+            棒と同じ視界に必ず置く。README「表現に関する注意」。
+          */}
+          <p className="muted" style={{ fontSize: 12, margin: "10px 0 0" }}>
+            「1号艇 コース標準との差」は、市場勝率が1号艇のコース標準（全国平均の
+            1着率{(COURSE_BASE[1] * 100).toFixed(0)}%）からどちらへ何pt振れているかです。
+            尺度は{devFormat(-DIVERGING_SCALE)}〜{devFormat(DIVERGING_SCALE)}に固定してあるので、
+            棒の長さはレースをまたいで比べられます。左（赤）へ長いほど、標準どおりの
+            決着になりにくいと市場が見ていることを表します。
+            <strong>
+              決まりにくさの目安であって、有利・不利や配当の高さを示すものではありません。
+            </strong>
+            過去1,236レースでは、この差で分けても三連単1万円超の出現率はほとんど
+            変わりませんでした。
+            {anyDevOverflow &&
+              "端が尖った棒は、目盛りの外まで届いています。"}
+          </p>
         </div>
       )}
 
+      {/*
+        「まもなく締切」にも市場評価1位のチップが並ぶので、この凡例が
+        どのチップの話なのかを言い切る。以前は「チップ＝確定1着」とだけ
+        書いてあり、締切前のレースに付いた市場評価のチップと矛盾していた。
+      */}
       <p className="legend">
+        下の一覧でレース番号の右に付く
         <LaneBadge lane={1} size={14} />
-        は確定した1着艇です。結果が出ていないレースには付きません。
+        は、確定した1着艇です。結果が出ていないレースには付きません。
       </p>
 
       <div className="venue-grid">

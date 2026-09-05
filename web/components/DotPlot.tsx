@@ -1,4 +1,5 @@
 import { LaneBadge } from "./LaneBadge";
+import { ScaleAxis } from "./Bars";
 
 /**
  * 狭い範囲に密集した値の比較に使うドットプロット。
@@ -74,7 +75,9 @@ export function DotPlot({
               <span
                 className="num"
                 style={{
-                  minWidth: 60,
+                  // ScaleAxis の右インセット(54+10)に合わせる。ここを変えると
+                  // 目盛りが点の軸からずれる。
+                  minWidth: 54,
                   textAlign: "right",
                   fontSize: 12,
                   fontWeight: isBest ? 700 : 400,
@@ -88,26 +91,17 @@ export function DotPlot({
         })}
       </div>
 
-      {/* 軸の実レンジを明示する。これが無いと点の位置だけでは差の大きさが分からない。 */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          marginLeft: 30,
-          marginRight: 70,
-          marginTop: 6,
-          fontSize: 11,
-          color: "var(--text-muted)",
-        }}
-        className="num"
-      >
-        <span>{format(lo)}</span>
-        <span>
-          幅 {(max - min).toFixed(2)}
-          {unit}
-        </span>
-        <span>{format(hi)}</span>
-      </div>
+      {/*
+        軸の実レンジを明示する。これが無いと点の位置だけでは差の大きさが分からない。
+        棒の2部品と同じ ScaleAxis を使う。以前は同じ形を自前で描いていたが、
+        flex の space-between だったため中央ラベル「幅 …」の位置が
+        左右ラベルの文字幅に依存していた。
+      */}
+      <ScaleAxis
+        left={format(lo)}
+        center={`幅 ${(max - min).toFixed(2)}${unit ?? ""}`}
+        right={format(hi)}
+      />
     </div>
   );
 }
