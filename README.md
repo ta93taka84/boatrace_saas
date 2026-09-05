@@ -383,6 +383,14 @@ GitHub Actionsに設定するシークレット:
    を設定する（Supabaseの Project Settings > API の値。`web/.env.example` 参照）。
 4. **ドメインを繋ぐ。** Vercelのドメイン設定で boat-win.jp を追加し、
    表示されるDNSレコードをレジストラ側に登録する。
+5. **アクセス解析を有効にする。** Vercelのプロジェクトの Analytics タブで
+   Web Analytics を有効にする。`web/app/layout.tsx` の `<Analytics />` は
+   組み込み済みだが、**有効化するまで何も記録されない**（スクリプトの読み込みが
+   404になるだけで、画面は壊れない）。
+
+   cookie も localStorage も使わず、訪問者はリクエストから作るハッシュで
+   数えられ、24時間で破棄される。**何を集めて何を集めないかは `/about` の
+   「アクセス解析」に書いてある。道具や項目を変えたら、その記載も必ず直すこと。**
 
 **Vercelでは環境変数の設定が必須。** 未設定だとローカルJSONを読もうとするが、
 Vercel上に `output/` は存在しないため、画面には何も表示されない。
