@@ -5,16 +5,9 @@ import { LaneBadge } from "@/components/LaneBadge";
 import { ProbBars, DivergingBars } from "@/components/Bars";
 import { DotPlot } from "@/components/DotPlot";
 import { ErrorCard } from "@/components/ErrorCard";
+import { courseDeviation } from "@/lib/course";
 
 export const dynamic = "force-dynamic";
-
-/**
- * コース別1着率の全国平均。市場評価との比較基準に使う。
- * scraper/scoring.py の COURSE_BASE_WIN_RATE と同じ値。
- */
-const COURSE_BASE: Record<number, number> = {
-  1: 0.55, 2: 0.145, 3: 0.12, 4: 0.105, 5: 0.055, 6: 0.025,
-};
 
 const LANES = [1, 2, 3, 4, 5, 6];
 
@@ -55,12 +48,11 @@ export default async function RacePage({
     value: market ? market[String(lane)] ?? null : null,
   }));
 
-  // 市場評価がコース標準からどれだけ離れているか。
+  // 市場評価がコース標準からどれだけ離れているか。トップページの一覧と
+  // 同じ基準・同じ尺度で出すので、基準は lib/course.ts に置いてある。
   const deviation = LANES.map((lane) => ({
     lane,
-    value: market && market[String(lane)] != null
-      ? market[String(lane)] - COURSE_BASE[lane]
-      : null,
+    value: courseDeviation(market, lane),
   }));
 
   const exhibit = LANES.map((lane) => ({

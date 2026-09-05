@@ -3,14 +3,11 @@ import { getStats } from "@/lib/stats";
 import { ProbBars } from "@/components/Bars";
 import { LaneBadge } from "@/components/LaneBadge";
 import { ErrorCard } from "@/components/ErrorCard";
+// 全国平均の目安。実測と並べて比較する。他の画面と同じ値を使う。
+import { COURSE_BASE } from "@/lib/course";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "実績集計｜ボートレース データビュー" };
-
-/** 全国平均の目安。実測と並べて比較する。 */
-const COURSE_BASE: Record<number, number> = {
-  1: 0.55, 2: 0.145, 3: 0.12, 4: 0.105, 5: 0.055, 6: 0.025,
-};
 
 /** 標準誤差。n件の割合pのばらつきの目安。 */
 function se(p: number, n: number) {
