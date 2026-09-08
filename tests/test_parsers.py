@@ -106,9 +106,54 @@ class TestOdds(unittest.TestCase):
         self.assertEqual(sorted(market_prob), [1, 2, 3, 4, 5, 6])
 
 
+class TestBeforeinfoMachine(unittest.TestCase):
+    """
+    プロペラ・部品交換・前走成績。
+
+    **ここは静かに間違う列が2つある。**
+    前走のSTは '.16' と整数部を省いた形で入るので、素直に数を拾うと 16.0 になる。
+    さらにフライングした走りは着順が「Ｆ」になるのに、STの欄には正の値が
+    そのまま残る。着順を見ずにSTだけ読むと、失格した走りが最良のSTに化ける。
+    """
+
+    def setUp(self):
+        self.racers = beforeinfo._parse_racers(soup_of("beforeinfo_parts.html"))
+
+    def test_parts_exchange_is_listed(self):
+        by_lane = {r["lane"]: r for r in self.racers}
+        self.assertEqual(by_lane[5]["parts"], ["リング×１"])
+        self.assertEqual(by_lane[1]["parts"], [])
+
+    def test_previous_start_timing_is_a_fraction(self):
+        for r in self.racers:
+            if r["prev_st"] is None:
+                continue
+            self.assertLess(abs(r["prev_st"]), 1.0,
+                            f"lane {r['lane']} の前走STが秒として大きすぎる")
+
+    def test_flying_previous_race_is_negative(self):
+        flying = [r for r in self.racers if r["prev_foul"] == "F"]
+        self.assertTrue(flying, "フライングの前走を含む固定データのはず")
+        for r in flying:
+            self.assertLess(r["prev_st"], 0, "フライングが正のSTとして読まれている")
+            self.assertIsNone(r["prev_rank"], "着順が数字でないのに順位が入っている")
+
+    def test_previous_course_is_in_range(self):
+        for r in self.racers:
+            if r["prev_course"] is not None:
+                self.assertIn(r["prev_course"], range(1, 7))
+
+
 class TestBeforeinfo(unittest.TestCase):
     def setUp(self):
         self.soup = soup_of("beforeinfo.html")
+
+    def test_machine_fields_absent_on_first_day(self):
+        """節の初日は前走が無い。空でも展示タイムまでの解釈は変わらない。"""
+        for r in beforeinfo._parse_racers(self.soup):
+            self.assertIsNone(r["prev_race_no"])
+            self.assertEqual(r["parts"], [])
+            self.assertIsNotNone(r["exhibit_time"])
 
     def test_exhibit_times_are_plausible(self):
         racers = beforeinfo._parse_racers(self.soup)

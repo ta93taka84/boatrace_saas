@@ -6,6 +6,7 @@
   py -3 backtest.py eval      20260825 20260901  # 収集済みデータで評価
   py -3 backtest.py calibrate 20260825 20260901  # 場別コース勝率を書き出す
   py -3 backtest.py backfill-start              # 進入コースとSTをキャッシュから後付け
+  py -3 backtest.py backfill-machine            # 部品交換と前走をキャッシュから後付け
 
 collect は過去日のみキャッシュされるため、eval と calibrate は
 サイトを叩き直さずに何度でも再実行できる。較正のパラメータを
@@ -466,6 +467,56 @@ def backfill_start():
     print(f"保有状況      : 本番 {total_start}/{len(rows)} / 展示 {total_ex}/{len(rows)} / 着順 {total_fin}/{len(rows)}")
 
 
+def backfill_machine():
+    """
+    収集済みの各行に、プロペラ交換・部品交換・前走成績を足す。
+    **キャッシュだけを読み、サイトは叩かない。**
+
+    直前情報ページの表には 展示タイム・チルトの右に プロペラ / 部品交換 /
+    前走成績 の列がある。長らく読み捨てていたが、ページ自体は enrich が
+    取得済みなので、追加のリクエストなしに後付けできる。
+
+    なぜ欲しいか。既存の特徴量は期別の集計値かその日の状態しかなく、
+    **節の途中で機力が変わったことを映すものが1つも無い。** 部品交換は
+    それを直接示す。前走成績は attach_history が結果ページから組む履歴と
+    重なるが、公式が「前走」として出している値なので突き合わせに使える。
+    """
+    rows = [json.loads(l) for l in DATASET.read_text(encoding="utf-8").splitlines() if l.strip()]
+    print(f"{len(rows)}件に部品交換と前走を付ける（キャッシュのみ）")
+
+    hit = miss = 0
+    for row in rows:
+        html = cached("/owpc/pc/race/beforeinfo",
+                      beforeinfo_params(row["date"], row["venue"], row["race_no"]))
+        parsed = parse_beforeinfo(html, row["race_no"]) if html else None
+        if not parsed:
+            miss += 1
+            continue
+        by_lane = {r["lane"]: r for r in parsed.get("racers", [])}
+        for racer in row.get("racers", []):
+            src = by_lane.get(racer["lane"])
+            if not src:
+                continue
+            for key in ("propeller_new", "parts", "prev_race_no",
+                        "prev_course", "prev_st", "prev_rank", "prev_foul"):
+                if key in src:
+                    racer[key] = src[key]
+        hit += 1
+
+    _write_all(rows)
+    boats = [r for row in rows for r in row.get("racers", [])]
+    with_parts = sum(1 for r in boats if r.get("parts"))
+    with_prop = sum(1 for r in boats if r.get("propeller_new"))
+    with_prev = sum(1 for r in boats if r.get("prev_race_no"))
+    fouls = sum(1 for r in boats if r.get("prev_foul"))
+    print(f"付与        : {hit}件 / キャッシュに無し {miss}件")
+    print(f"延べ{len(boats)}艇のうち")
+    print(f"  部品交換あり: {with_parts} ({with_parts/max(len(boats),1)*100:.1f}%)")
+    print(f"  プロペラ新品: {with_prop} ({with_prop/max(len(boats),1)*100:.1f}%)")
+    print(f"  前走あり    : {with_prev} ({with_prev/max(len(boats),1)*100:.1f}%)")
+    print(f"  うち着順が記号（F/L等）: {fouls}")
+
+
 def _write_all(rows):
     with DATASET.open("w", encoding="utf-8") as f:
         for r in rows:
@@ -490,5 +541,7 @@ if __name__ == "__main__":
         enrich()
     elif cmd == "backfill-start":
         backfill_start()
+    elif cmd == "backfill-machine":
+        backfill_machine()
     else:
         print(__doc__)

@@ -41,6 +41,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </header>
         <SiteNav />
         {children}
+        <footer className="site-foot">
+          <div className="site-foot-inner">
+            <Link href="/terms">免責事項</Link>
+            <span className="muted">
+              公式発表ではありません。20歳未満の方は舟券を購入できません。
+            </span>
+          </div>
+        </footer>
         <Analytics />
       </body>
     </html>

@@ -10,10 +10,15 @@ import { usePathname } from "next/navigation";
  * 現在地の判定にパスが要るのでクライアントコンポーネントにしている。
  * レース詳細は一覧の下位なので、そちらも「レース一覧」を現在地として扱う。
  */
+/*
+ * **開発者向けの画面（/stats /about）はここに置かない。**
+ * 検証成績やデータの取得方法は、作っている側には意味があるが、
+ * 舟券を検討しに来た人が最初に見たいものではない。管理者がURLを直に
+ * 開けば足りる（2026-09-08 の方針）。
+ */
 const ITEMS = [
   { href: "/", label: "レース一覧" },
-  { href: "/stats", label: "実績集計" },
-  { href: "/about", label: "データについて" },
+  { href: "/featured", label: "注目レース" },
 ];
 
 export function SiteNav() {

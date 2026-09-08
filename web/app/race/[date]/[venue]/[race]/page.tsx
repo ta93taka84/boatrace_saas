@@ -61,6 +61,22 @@ export default async function RacePage({
   }));
   const exhibitPresent = exhibit.filter((e) => e.value != null);
 
+  // スタート展示。進入コース順に並べる。枠なり進入なら 1〜6 の順に揃う。
+  // **枠番と進入は別物。** 前づけがあるとここで並びが崩れ、それがそのまま
+  // 展開の読みになる（実測では結果ページの18.1%が枠番と一致しない）。
+  const exhibition = racers
+    .filter((r) => r.ex_course != null)
+    .sort((a, b) => (a.ex_course ?? 0) - (b.ex_course ?? 0));
+  const hasExhibition = exhibition.length > 0;
+  const maezuke = exhibition.some((r) => r.ex_course !== r.lane);
+  const exStValues = exhibition
+    .map((r) => r.ex_st)
+    .filter((v): v is number => v != null);
+  const bestExSt = exStValues.length ? Math.min(...exStValues) : null;
+
+  // 今節の前走。節の初日は全艇とも空になるので、その日は列ごと出さない。
+  const hasPrev = racers.some((r) => r.prev_race_no != null);
+
   const cond = race.conditions;
 
   // 列ごとの最良値。10列の数字が均一に並ぶと、どこを見ればよいか手がかりが無い。
@@ -109,6 +125,22 @@ export default async function RacePage({
         .filter((x) => x.pos >= 1 && x.pos <= 3)
         .sort((a, b) => a.pos - b.pos)
     : [];
+
+  // AI予想。model_prob は6艇の1着確率、picks は三連単の推奨買い目。
+  // 尺度は市場勝率の棒と同じ0〜100%に固定する。別々の尺度で描くと、
+  // 隣り合う2枚の棒の長さを比べられなくなる（DESIGN.md の決まり）。
+  // 画面に出すのは公開確率（市場オッズへ引き戻したもの）。古いデータには
+  // pub_prob が無いので、その場合だけモデル単独の値に落とす。
+  const model = race.pub_prob ?? race.model_prob;
+  const modelValues = LANES.map((lane) => ({
+    lane,
+    value: model ? model[String(lane)] ?? null : null,
+  }));
+  const hasModel = modelValues.some((v) => v.value != null);
+  const topPick = hasModel
+    ? modelValues.reduce((a, b) => ((b.value ?? -1) > (a.value ?? -1) ? b : a))
+    : null;
+  const picks = race.picks ?? [];
 
   return (
     <main className="wrap">
@@ -166,6 +198,143 @@ export default async function RacePage({
           )}
         </div>
       )}
+      {hasModel && (
+        <div className="card">
+          <h3>AI予想</h3>
+          {topPick?.value != null && (
+            <p
+              style={{
+                marginTop: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 15,
+              }}
+            >
+              <span className="muted" style={{ fontSize: 12 }}>
+                本命
+              </span>
+              <LaneBadge lane={topPick.lane} />
+              <span className="num" style={{ fontWeight: 700 }}>
+                {(topPick.value * 100).toFixed(1)}%
+              </span>
+            </p>
+          )}
+
+          <div className="grid2">
+            <div>
+              <p className="sub">予測1着率</p>
+              <ProbBars
+                values={modelValues}
+                max={1}
+                emphasize={topPick?.lane}
+                format={(v) => `${(v * 100).toFixed(1)}%`}
+              />
+              <p
+                className="muted"
+                style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}
+              >
+                棒の尺度は下の「市場勝率」と同じ0〜100%です。
+                並べて長さをそのまま比べられます。
+              </p>
+            </div>
+
+            <div>
+              <p className="sub">推奨買い目（3連単）</p>
+              {picks.length > 0 ? (
+                <div className="scroll-x">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th className="l">買い目</th>
+                        <th>予測確率</th>
+                        <th>オッズ</th>
+                        <th>期待値</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {picks.map((pick) => (
+                        <tr key={pick.combo}>
+                          <td className="l num">{pick.combo}</td>
+                          <td className="num">{(pick.prob * 100).toFixed(1)}%</td>
+                          <td className="num">{pick.odds.toFixed(1)}</td>
+                          <td className={pick.ev >= 1 ? "num best" : "num"}>
+                            {pick.ev.toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="muted" style={{ fontSize: 13 }}>
+                  オッズが取れていないため算出していません
+                </p>
+              )}
+              <p
+                className="muted"
+                style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}
+              >
+                期待値は 予測確率 × オッズ です。1.00 を超えると理論上プラスに
+                なりますが、オッズは締切に向けて動くため、購入時の値とは異なります。
+                並んでいるのは当たりやすい順ではなく、
+                <strong>オッズに対して確率が高い順</strong>です。本命が頭に
+                入らない買い目もあります。
+              </p>
+            </div>
+          </div>
+
+          <p
+            className="muted"
+            style={{ fontSize: 12, marginTop: 14, marginBottom: 0 }}
+          >
+            AI予想は統計モデルによる推定であり、的中や利益を保証するものでは
+            ありません。舟券の購入はご自身の判断と責任でお願いします。20歳未満の
+            方は舟券を購入できません。
+            <Link href="/terms"> 免責事項</Link>
+          </p>
+        </div>
+      )}
+
+      {hasExhibition && (
+        <div className="card">
+          <h3>スタート展示</h3>
+          <p className="sub" style={{ marginTop: 0 }}>
+            左が1コース。カッコ内は展示のスタートタイミングです。
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+            {exhibition.map((r) => (
+              <span
+                key={r.lane}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {r.ex_course}
+                </span>
+                <LaneBadge lane={r.lane} />
+                <span
+                  className="num"
+                  style={{
+                    fontSize: 13,
+                    fontWeight: r.ex_st != null && r.ex_st === bestExSt ? 700 : 400,
+                  }}
+                >
+                  {r.ex_st != null
+                    ? `(${r.ex_st < 0 ? "F" : ""}${Math.abs(r.ex_st).toFixed(2)})`
+                    : "(—)"}
+                </span>
+              </span>
+            ))}
+          </div>
+          <p className="muted" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+            {maezuke
+              ? "枠番と違う並びです。前づけがあり、枠なり進入になっていません。"
+              : "枠なり進入です。1号艇から順に並んでいます。"}
+            {" "}展示のスタートは本番と一致するとは限りません（相関 r = 0.12）。
+          </p>
+        </div>
+      )}
+
       <div className="card">
         <h3>出走表</h3>
         <div className="scroll-x">
@@ -182,6 +351,7 @@ export default async function RacePage({
                 <th>モーター</th>
                 <th>ボート</th>
                 {hasExhibit && <th>展示</th>}
+                {hasPrev && <th>前走</th>}
               </tr>
             </thead>
             <tbody>
@@ -191,7 +361,9 @@ export default async function RacePage({
                   return (
                     <tr key={lane} className={`lane-${lane}`}>
                       <td className="l"><LaneBadge lane={lane} /></td>
-                      <td className="l muted" colSpan={hasExhibit ? 9 : 8}>未取得</td>
+                      <td className="l muted" colSpan={8 + (hasExhibit ? 1 : 0) + (hasPrev ? 1 : 0)}>
+                        未取得
+                      </td>
                     </tr>
                   );
                 }
@@ -222,6 +394,27 @@ export default async function RacePage({
                     {hasExhibit && (
                       <td className={cell(r.exhibit_time === bestExhibit)}>
                         {r.exhibit_time ? r.exhibit_time.toFixed(2) : "—"}
+                      </td>
+                    )}
+                    {hasPrev && (
+                      <td className="num">
+                        {r.prev_race_no != null ? (
+                          <>
+                            {r.prev_course != null && `${r.prev_course}コース `}
+                            <span style={{ fontWeight: 700 }}>
+                              {r.prev_foul ?? (r.prev_rank != null ? `${r.prev_rank}着` : "—")}
+                            </span>
+                            {r.prev_st != null && (
+                              <span className="muted">
+                                {" "}
+                                {r.prev_st < 0 ? "F" : ""}
+                                {Math.abs(r.prev_st).toFixed(2)}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                     )}
                   </tr>

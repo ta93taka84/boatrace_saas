@@ -46,7 +46,8 @@ export async function getDay(date: string): Promise<DayData | null> {
        race_entries ( * ),
        race_results ( winner_lane, finish, kimarite, payouts ),
        odds_snapshots ( overround, market_prob, captured_at ),
-       predictions ( model_prob, ev, top_lane, top_ev, calibrated )`
+       predictions ( model_prob, ev, top_lane, top_ev, picks,
+                     pub_prob, blend_weight, calibrated )`
     )
     .eq("race_date", iso(date))
     .order("race_no");
@@ -132,12 +133,17 @@ function toRace(row: any): Race {
     }
   }
 
-  // 未較正の予測はRLSで返らない想定だが、念のため画面側でも出さない。
-  if (prediction?.calibrated) {
+  // 較正の有無に関わらず予測を出す（2026-09-07 に方針を変えた）。
+  // calibrated は「そのモデルが市場オッズを上回っていたか」の記録として
+  // 残っているだけで、表示の門番ではない。
+  if (prediction) {
     race.model_prob = prediction.model_prob ?? undefined;
     race.ev = prediction.ev ?? undefined;
     race.top_lane = prediction.top_lane ?? undefined;
     race.top_ev = prediction.top_ev ?? undefined;
+    race.picks = prediction.picks ?? undefined;
+    race.pub_prob = prediction.pub_prob ?? undefined;
+    race.blend_weight = prediction.blend_weight ?? undefined;
   }
 
   if (result) {
@@ -184,34 +190,9 @@ async function listDatesFromFiles(): Promise<string[]> {
 async function getDayFromFile(date: string): Promise<DayData | null> {
   try {
     const raw = await fs.readFile(path.join(OUTPUT_DIR, `${date}.json`), "utf-8");
-    return stripUncalibrated(JSON.parse(raw) as DayData);
+    return JSON.parse(raw) as DayData;
   } catch {
     return null;
   }
 }
 
-/**
- * 未較正の予測を落とす。
- *
- * DB経路は predictions.calibrated で門番を通し、schema.sql のRLSでも
- * 未較正の行を返さないようにしてある。ファイル経路にはその門番が無く、
- * JSONに入っているEVがそのまま画面まで届いていた。Supabaseの環境変数を
- * 設定し忘れた状態がまさにこの経路なので、同じ門番をここにも置く。
- *
- * 較正が済むまでEVを出さないのはプロジェクトの決まり（CLAUDE.md）。
- * jobs.py が各レースに calibrated を刻んでいる。印が無い古いファイルは
- * 未較正として扱う。
- */
-function stripUncalibrated(day: DayData): DayData {
-  for (const venue of day.venues ?? []) {
-    for (const race of venue.races ?? []) {
-      if (!(race as { calibrated?: boolean }).calibrated) {
-        delete race.model_prob;
-        delete race.ev;
-        delete race.top_lane;
-        delete race.top_ev;
-      }
-    }
-  }
-  return day;
-}

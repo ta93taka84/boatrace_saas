@@ -1,6 +1,10 @@
 import Link from "next/link";
 
-export const metadata = { title: "データについて｜ボートレース データビュー" };
+// 管理者向けの画面。ナビには出さず、検索エンジンにも載せない。
+export const metadata = {
+  title: "データについて｜ボートレース データビュー",
+  robots: { index: false, follow: false },
+};
 
 export default function About() {
   return (
@@ -48,8 +52,17 @@ export default function About() {
         <h2>予測モデル</h2>
         <p style={{ marginTop: 0 }}>
           コース別の基準に、選手の級別・勝率・平均ST・展示タイム・気象で補正を
-          かけて各艇の勝率を推定しています。ただし
-          <strong>市場オッズより精度が低い</strong>ため、期待値は画面に出していません。
+          かけて各艇の勝率を推定しています。各レースの「AI予想」はこの推定で、
+          3連単の推奨買い目は、その1着確率を順位に展開して各買い目の確率を出し、
+          オッズを掛けたものです。ただし
+          <strong>現時点では市場オッズより精度が低い</strong>状態です。
+        </p>
+        <p>
+          そのため、画面に出している確率はモデルの出力そのものではなく、
+          <strong>市場オッズへ8割引き戻したもの</strong>です（モデルの重み0.2）。
+          この重みは、混ぜた確率が市場と統計的に区別できなくなる範囲で
+          いちばん大きい値を検証から選んでいます。引き戻しても推奨買い目の
+          並び順は変わりません。変わるのは期待値の目盛りだけです。
         </p>
         <p>
           検証612レース（2026年8月29日〜9月1日）での成績です。
@@ -88,8 +101,8 @@ export default function About() {
           </table>
         </div>
         <p style={{ marginBottom: 0, marginTop: 14 }}>
-          市場を下回るモデルの期待値は優位性を示しません。
-          検証で上回った時点で公開します。
+          市場を下回っている間、表示している期待値は理論上の優位性を意味しません。
+          モデルの改良は続けており、この数字は検証のたびに更新します。
         </p>
       </div>
 
@@ -134,6 +147,14 @@ export default function About() {
           広告も配信していません。
         </p>
       </div>
+      <div className="card">
+        <h2>この画面について</h2>
+        <p style={{ marginTop: 0, marginBottom: 0 }}>
+          ここは管理者向けの画面です。利用者向けの免責事項は{" "}
+          <Link href="/terms">免責事項</Link> にあります。
+        </p>
+      </div>
+
     </main>
   );
 }

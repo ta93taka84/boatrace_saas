@@ -25,6 +25,20 @@ export interface Racer {
   boat_in3_rate: number;
   exhibit_time?: number | null;
   tilt?: number | null;
+  /** スタート展示の進入コース。枠番と違えば前づけがあったということ。 */
+  ex_course?: number | null;
+  /** スタート展示のST。フライングは負の値。 */
+  ex_st?: number | null;
+  propeller_new?: boolean | null;
+  parts?: string[] | null;
+  /** 今節の前走。節の初日は空。 */
+  prev_race_no?: number | null;
+  prev_course?: number | null;
+  /** 前走のST。フライングは負の値。 */
+  prev_st?: number | null;
+  prev_rank?: number | null;
+  /** 着順が数字でないときの記号（F=フライング、L=出遅れ など）。 */
+  prev_foul?: string | null;
 }
 
 export interface Conditions {
@@ -52,11 +66,29 @@ export interface Race {
   overround?: number;
   /** 表示中のオッズを取得した時刻（HH:MM）。オッズは締切に向けて動くため鮮度が要る。 */
   odds_at?: string;
+  /** モデル単独の推定。記録用で、画面に出すのは pub_prob のほう。 */
   model_prob?: Record<string, number>;
+  /** 公開する確率。model_prob を市場オッズへ blend_weight ぶん引き戻したもの。 */
+  pub_prob?: Record<string, number>;
+  /** 市場へどれだけ引き戻したか。0で市場そのまま、1でモデル単独。 */
+  blend_weight?: number;
   ev?: Record<string, number>;
   top_lane?: number;
   top_ev?: number;
+  /** 推奨買い目。EVの高い順。オッズが取れていないレースでは付かない。 */
+  picks?: TrifectaPick[];
   result?: RaceResult;
+}
+
+export interface TrifectaPick {
+  /** "1-3-5" の形。1着-2着-3着の艇番。 */
+  combo: string;
+  /** モデルがこの並びに与えた確率。 */
+  prob: number;
+  /** 表示時点の三連単オッズ。 */
+  odds: number;
+  /** prob × odds。1.0超で理論上プラス。 */
+  ev: number;
 }
 
 export interface Venue {

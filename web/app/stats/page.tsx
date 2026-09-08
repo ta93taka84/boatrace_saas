@@ -7,7 +7,11 @@ import { ErrorCard } from "@/components/ErrorCard";
 import { COURSE_BASE } from "@/lib/course";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "実績集計｜ボートレース データビュー" };
+// 管理者向けの画面。ナビには出さず、検索エンジンにも載せない。
+export const metadata = {
+  title: "実績集計｜ボートレース データビュー",
+  robots: { index: false, follow: false },
+};
 
 /** 標準誤差。n件の割合pのばらつきの目安。 */
 function se(p: number, n: number) {

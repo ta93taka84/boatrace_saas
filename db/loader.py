@@ -182,6 +182,9 @@ ENTRY_FIELDS = [
     "motor_no", "motor_in2_rate", "motor_in3_rate",
     "boat_no", "boat_in2_rate", "boat_in3_rate",
     "exhibit_time", "tilt",
+    "ex_course", "ex_st",
+    "propeller_new", "parts",
+    "prev_race_no", "prev_course", "prev_st", "prev_rank", "prev_foul",
 ]
 
 
@@ -262,20 +265,28 @@ def _upsert_prediction(cur, race_id, race):
     cur.execute(
         """
         insert into predictions (race_id, model_version, model_prob, ev,
-                                 top_lane, top_ev, calibrated)
-        values (%s,%s,%s,%s,%s,%s,%s)
+                                 top_lane, top_ev, picks, pub_prob,
+                                 blend_weight, calibrated)
+        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (race_id, model_version) do update set
           model_prob = excluded.model_prob,
           ev         = excluded.ev,
           top_lane   = excluded.top_lane,
           top_ev     = excluded.top_ev,
+          picks        = excluded.picks,
+          pub_prob     = excluded.pub_prob,
+          blend_weight = excluded.blend_weight,
           calibrated = excluded.calibrated,
           created_at = now()
         """,
         (race_id, MODEL_VERSION,
          Jsonb(_str_keys(race.get("model_prob", {}))),
          Jsonb(_str_keys(race.get("ev", {}))),
-         race.get("top_lane"), race.get("top_ev"), CALIBRATED),
+         race.get("top_lane"), race.get("top_ev"),
+         Jsonb(race["picks"]) if race.get("picks") else None,
+         Jsonb(_str_keys(race["pub_prob"])) if race.get("pub_prob") else None,
+         race.get("blend_weight"),
+         CALIBRATED),
     )
 
 

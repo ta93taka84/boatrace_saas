@@ -82,11 +82,50 @@ def _parse_start_exhibition(soup) -> list[dict]:
     return exhibition
 
 
+# 直前情報から出走表側の各艇へ移す項目。
+# **検証で採用した特徴量をここに足し忘れると、バックテストでは効くのに
+# 本番では欠測、という形の事故になる。** 取り込む側（jobs.py と pipeline.py）が
+# 別々に列を並べていたので、1か所にまとめてある。
+MERGE_KEYS = ("exhibit_time", "tilt", "propeller_new", "parts",
+              "prev_race_no", "prev_course", "prev_st", "prev_rank", "prev_foul")
+
+
+def merge_into_racers(racers: list[dict], before: dict) -> None:
+    """
+    直前情報を出走表側の各艇へ書き込む。破壊的に更新する。
+
+    スタート展示は艇ごとではなく進入順の並びで返るので、艇番で引き直して
+    ex_course（展示の進入コース）と ex_st（展示のST）にする。**枠番と進入は
+    別物で、実測では結果ページの18.1%が一致しない。** 前づけがあった
+    レースかどうかは、この2つを並べて初めて分かる。
+    """
+    by_lane = {r["lane"]: r for r in before.get("racers") or []}
+    exhibition = {e["lane"]: e for e in before.get("start_exhibition") or []}
+    for racer in racers:
+        source = by_lane.get(racer["lane"])
+        if source:
+            for key in MERGE_KEYS:
+                if source.get(key) is not None:
+                    racer[key] = source[key]
+        shown = exhibition.get(racer["lane"])
+        if shown:
+            racer["ex_course"] = shown.get("course")
+            racer["ex_st"] = shown.get("st")
+
+
 def _parse_racers(soup) -> list[dict]:
     """
     展示テーブルの列順は thead 準拠:
       枠 / 写真 / ボートレーサー / 体重 / 展示タイム / チルト / プロペラ / 部品交換 / 前走成績
     1選手 = 1 tbody（4行）。展示前は空文字なので None を入れる。
+
+    プロペラ・部品交換・前走成績は長らく読み捨てていた。**このページは既に
+    取得してキャッシュしてあるので、読むのに追加のリクエストは要らない。**
+    他の特徴量は期別の集計値か当日の状態しかなく、「節の途中で機力が変わった」
+    ことを映すものが1つも無かった。部品交換はそれを直接示す。
+
+    列が増減したら静かにずれる。tbody あたりのセル数が17に満たない場合は
+    新しい項目を落とし、展示タイムまでの解釈は変えない。
     """
     table = soup.select_one("table.is-w748")
     if not table:
@@ -100,14 +139,76 @@ def _parse_racers(soup) -> list[dict]:
         lane = _int(tds[0].get_text(strip=True))
         if not 1 <= lane <= 6:
             continue
-        racers.append({
+        racer = {
             "lane": lane,
             "weight": _float(tds[3].get_text(strip=True)),
             "exhibit_time": _float(tds[4].get_text(strip=True)),
             "tilt": _float(tds[5].get_text(strip=True), signed=True),
-        })
+        }
+        if len(tds) >= 17:
+            racer.update(_parse_machine(tds))
+        racers.append(racer)
 
     return racers
+
+
+def _parse_machine(tds) -> dict:
+    """
+    プロペラ・部品交換・前走成績。列の位置は _parse_racers の docstring を参照。
+
+    前走成績は「今節の前の走り」で、進入コース・ST・着順が入る。節の初日は
+    どの艇も空になる。
+    """
+    parts = [li.get_text(strip=True) for li in tds[7].select("li")]
+
+    # **着順の欄はSTの欄より先に読む。** フライングした走りは着順が「Ｆ」に
+    # なるが、STの欄には '.01' のように正の値がそのまま入る。着順を見ずに
+    # STだけ読むと、失格した走りが「最良のST」として特徴量に入る。
+    # 同じ取り違えを experiment.py の直近STで一度やっている。
+    rank_text = _ascii(tds[16].get_text(strip=True)).upper()
+    rank = _int(rank_text) if rank_text.isdigit() else None
+    foul = rank_text if rank_text and not rank_text.isdigit() else None
+
+    return {
+        "propeller_new": "新" in tds[6].get_text(strip=True),
+        "parts": [p for p in parts if p],
+        "prev_race_no": _int(_ascii(tds[9].get_text(strip=True))),
+        "prev_course": _int(_ascii(tds[11].get_text(strip=True))),
+        "prev_st": _prev_st(tds[14].get_text(strip=True), flying=(foul == "F")),
+        "prev_rank": rank,
+        # 着順が数字でないときの記号。F=フライング、L=出遅れ、失=失格など。
+        "prev_foul": foul,
+    }
+
+
+_TO_ASCII = str.maketrans("０１２３４５６７８９ＦＬ", "0123456789FL")
+
+
+def _ascii(text: str) -> str:
+    """着順や進入は全角で入ることがある（'６' 'Ｆ'）。半角に寄せてから読む。"""
+    return text.translate(_TO_ASCII)
+
+
+def _prev_st(text: str, flying: bool = False) -> float | None:
+    """
+    前走のST。'.17' のように整数部を省いた形で入る。
+
+    フライングは 'F.02' で、結果ページと同じく負の値で表す。ここを
+    正の小さい値として読むと、失格した走りが「最良のST」に化ける。
+    """
+    text = _ascii(text).strip()
+    if not text:
+        return None
+    flying = flying or text.upper().startswith("F")
+    body = text.lstrip("FfLl").strip()
+    # 整数部が無い表記なので、先に0を補う。補わないと _float の正規表現が
+    # 小数点を跨げず、'.16' を 16.0 として読む。
+    if body.startswith("."):
+        body = "0" + body
+    value = _float(body)
+    if value is None:
+        return None
+    return round(-value if flying else value, 2)
 
 
 def _parse_weather(soup) -> dict:

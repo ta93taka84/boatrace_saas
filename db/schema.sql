@@ -86,8 +86,36 @@ create table if not exists race_entries (
   exhibit_time     numeric(4,2),
   tilt             numeric(3,1),
 
+  -- スタート展示。枠番と進入は別物で、実測では結果ページの18.1%が
+  -- 一致しない。前づけのあるレースかどうかは、この2つを並べて分かる。
+  ex_course        smallint,
+  ex_st            numeric(4,2),
+
+  -- 機力の急変。部品交換は「節の途中で機力が変わった」ことを直接示す。
+  propeller_new    boolean,
+  parts            text[],
+
+  -- 今節の前走。着順が数字でないとき（F/L等）は prev_rank が空になり、
+  -- 記号が prev_foul に入る。**フライングの前走は prev_st が負になる。**
+  prev_race_no     smallint,
+  prev_course      smallint,
+  prev_st          numeric(4,2),
+  prev_rank        smallint,
+  prev_foul        text,
+
   primary key (race_id, lane)
 );
+
+-- 既に作ってあるDBへの追加（create table if not exists は列を増やさない）。
+alter table race_entries add column if not exists ex_course     smallint;
+alter table race_entries add column if not exists ex_st         numeric(4,2);
+alter table race_entries add column if not exists propeller_new boolean;
+alter table race_entries add column if not exists parts         text[];
+alter table race_entries add column if not exists prev_race_no  smallint;
+alter table race_entries add column if not exists prev_course   smallint;
+alter table race_entries add column if not exists prev_st       numeric(4,2);
+alter table race_entries add column if not exists prev_rank     smallint;
+alter table race_entries add column if not exists prev_foul     text;
 
 -- -------------------------------------------------------------------- オッズ
 -- 締切に向けて動くため履歴として積む。最新1件を見るのが基本。
@@ -133,12 +161,30 @@ create table if not exists predictions (
   top_lane       smallint,
   top_ev         numeric(6,3),
 
-  -- そのモデルがバックテストで市場オッズを上回っているか。
-  -- falseの予測を公開画面に出してはならない。
+  -- 公開した確率。model_prob を市場オッズへ blend_weight ぶん引き戻したもの。
+  -- 画面に出るのはこちら。model_prob はモデル単独の出力として残す。
+  pub_prob       jsonb,
+  blend_weight   numeric(4,2),
+
+  -- 推奨買い目。[{"combo":"1-3-5","prob":0.041,"odds":29.5,"ev":1.21}, ...]
+  -- EVの高い順に TRIFECTA_PICKS 本だけ。三連単の確率は
+  -- 1着確率を Plackett-Luce で展開して作る（scoring.trifecta_probs）。
+  picks          jsonb,
+
+  -- そのモデルがバックテストで市場オッズを上回っているかの記録。
+  -- 2026-09-07 まではこれが公開の門番を兼ねていた。今は成績を
+  -- 後から追うための印であり、公開の可否とは別の軸として扱う。
+  -- **公開したいからといって true に書き換えないこと。** これは事実を表す値で、
+  -- model_performance ビューで後から読むときの前提になる。
   calibrated     boolean not null default false,
 
   unique (race_id, model_version)
 );
+
+-- 既に作ってあるDBへの追加（create table if not exists は列を増やさない）。
+alter table predictions add column if not exists picks jsonb;
+alter table predictions add column if not exists pub_prob jsonb;
+alter table predictions add column if not exists blend_weight numeric(4,2);
 
 create index if not exists predictions_version_idx
   on predictions (model_version, created_at desc);
@@ -215,7 +261,14 @@ create policy "public read entries" on race_entries  for select using (true);
 create policy "public read odds"    on odds_snapshots for select using (true);
 create policy "public read results" on race_results  for select using (true);
 
--- 未較正の予測は公開しない。CALIBRATED=false のまま出すと
--- 単なるモデル誤差を「期待値プラス」として見せることになる。
-create policy "public read calibrated predictions" on predictions
-  for select using (calibrated = true);
+-- 予測は較正の有無に関わらず公開する（2026-09-07 に方針変更）。
+--
+-- ここには「未較正の予測は公開しない」という制約があった。AI予想を
+-- 出すと決めたことで、この門番は外す。モデルの性能向上は並行して進める。
+-- calibrated 列は残す（後から成績を追うための事実の記録）。
+--
+-- 展開済みのDBには旧ポリシーが残っているので、先に落としてから作る。
+drop policy if exists "public read calibrated predictions" on predictions;
+drop policy if exists "public read predictions" on predictions;
+create policy "public read predictions" on predictions
+  for select using (true);

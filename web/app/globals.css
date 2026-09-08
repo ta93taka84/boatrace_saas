@@ -151,6 +151,23 @@ a { color: var(--accent); }
 
 .site-note { color: var(--text-muted); font-size: 12px; }
 
+/* フッター。免責事項への導線を全ページに置く */
+.site-foot {
+  border-top: 1px solid var(--grid);
+  margin-top: var(--space-4);
+}
+
+.site-foot-inner {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: 14px var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
 /* 全幅の金の帯。参考サイトのグローバルナビと同じ作り（参考サイトは赤） */
 .gnav { background: var(--accent-bar); }
 

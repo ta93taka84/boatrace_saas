@@ -23,7 +23,7 @@ from pathlib import Path
 
 from scraper.schedule import get_active_venues
 from scraper.racelist import get_racelist
-from scraper.beforeinfo import get_beforeinfo
+from scraper.beforeinfo import get_beforeinfo, merge_into_racers
 from scraper.odds import get_odds
 from scraper.scoring import score_race, CALIBRATED
 
@@ -72,7 +72,7 @@ def run(date_str: str, fetch_before: bool = False):
                             "wind_speed", "wind_dir_code", "wave_height",
                         )
                     }
-                    _merge_beforeinfo(race_data, before["racers"])
+                    merge_into_racers(race_data.get("racers", []), before)
                     print("直前✓ ", end="", flush=True)
 
             # オッズ（市場勝率）
@@ -88,7 +88,8 @@ def run(date_str: str, fetch_before: bool = False):
 
             # 予測勝率・期待値
             scores = score_race(race_data.get("racers", []), market_prob, code,
-                                race_data.get("conditions"))
+                                race_data.get("conditions"),
+                                odds["odds"] if odds else None)
             if scores:
                 race_data.update(scores)
                 if "top_ev" in scores:
@@ -104,17 +105,6 @@ def run(date_str: str, fetch_before: bool = False):
     print(f"\n保存完了: {out_path}")
 
     _print_summary(result)
-
-
-def _merge_beforeinfo(race_data: dict, before_racers: list):
-    lane_map = {r["lane"]: r for r in before_racers}
-    for racer in race_data.get("racers", []):
-        bi = lane_map.get(racer["lane"])
-        if not bi:
-            continue
-        for key in ("exhibit_time", "tilt"):
-            if bi.get(key) is not None:
-                racer[key] = bi[key]
 
 
 def _print_summary(result: dict):

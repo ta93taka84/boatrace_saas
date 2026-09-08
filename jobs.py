@@ -40,7 +40,7 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 from scraper.schedule import get_active_venues, get_close_times
 from scraper.racelist import get_racelist
-from scraper.beforeinfo import get_beforeinfo
+from scraper.beforeinfo import get_beforeinfo, merge_into_racers
 from scraper.odds import get_odds
 from scraper.result import get_result
 from scraper.scoring import score_race, CALIBRATED
@@ -223,13 +223,7 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
                     "wind_speed", "wind_dir_code", "wave_height",
                 )
             }
-            lane_map = {r["lane"]: r for r in before["racers"]}
-            for racer in slot.get("racers", []):
-                bi = lane_map.get(racer["lane"])
-                if bi:
-                    for key in ("exhibit_time", "tilt"):
-                        if bi.get(key) is not None:
-                            racer[key] = bi[key]
+            merge_into_racers(slot.get("racers", []), before)
 
         market_prob = None
         odds = get_odds(date_str, venue["code"], rno)
@@ -240,13 +234,12 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
             slot["odds"] = odds["odds"]
 
         scores = score_race(slot.get("racers", []), market_prob, venue["code"],
-                            slot.get("conditions"))
+                            slot.get("conditions"), slot.get("odds"))
         if scores:
             slot.update(scores)
-            # DB側は loader が predictions.calibrated に同じ印を刻み、RLSが
-            # 未較正の予測を公開画面から隠している。日次JSONにも同じ印を残す。
-            # これが無いと、Supabaseの環境変数が未設定でファイルを読む経路
-            # （手元と、Vercelで設定を忘れた状態）だけ門番を素通りする。
+            # その予測を出したモデルが市場オッズを上回っていたかの記録。
+            # 2026-09-07 まではこれが公開の門番を兼ねていたが、予想を出す
+            # 方針に変わったので、今は後から成績を追うための印として残す。
             slot["calibrated"] = CALIBRATED
 
         print(f"  {venue['name']} {rno}R (締切{hhmm}) 取得完了")

@@ -14,6 +14,8 @@ import math
 import sys
 from pathlib import Path
 
+from scraper.scoring import BLEND_WEIGHT
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 DATASET = Path("output/backtest.jsonl")
@@ -183,6 +185,30 @@ FEATURES_ALL = FEATURES_CURRENT + [
 FEATURES_TODAY = FEATURES_CURRENT + ["exhibit"]
 FEATURES_TODAY_FULL = FEATURES_ALL + ["exhibit", "tilt", "wind_inner", "wave_inner"]
 
+# スタート展示から作る特徴量。締切前に分かるのに、いままで使っていなかった。
+#
+#   ex_st    展示のST。小さいほど良いので符号を反転する。
+#            **展示のフライングは失格ではない。** beforeinfo は早すぎたSTを
+#            負で持つので、反転すると大きな正になり「最良」として扱われる。
+#            本番のSTと違って罰は無いため、これは意図した扱いだが、向きが
+#            正しいかは検証で確かめること（本番STの向きとは前提が違う）。
+#   ex_gain  枠番から進入コースへ何コース内に入ったか。正なら前づけが通った艇。
+#            0は「枠なり」で、欠損ではなく最頻の正当な値。
+#
+# スタート展示は予想の材料として広く見られている（周回展示の展示タイムと並ぶ
+# 直前情報の柱）が、展示STと本番STの相関は r = 0.121 と弱い。効くかどうかは
+# 検証で決める。
+FEATURES_EXHIBITION = ["ex_st", "ex_gain"]
+
+# 機力の急変。直前情報ページの「プロペラ」「部品交換」列から作る。
+# backtest.py backfill-machine がキャッシュから各艇に書き込む。
+#
+# 他の特徴量は期別の集計値（勝率・平均ST）か、その日の状態（展示タイム・
+# チルト・気象）しかなく、**節の途中で機力が変わったことを映すものが無い。**
+# 部品交換はそれを直接示す。向きは事前に決めない。整備で上向くのか、
+# 不調だから交換したのかは、当てはめに決めさせる。
+FEATURES_MACHINE = ["parts", "prop_new"]
+
 # 節間の履歴から作る特徴量。attach_history が各艇に書き込む。
 #
 # READMEは市場オッズとの残り0.10の差を「節間成績や選手の直近の調子など、
@@ -212,13 +238,15 @@ FEATURES_TODAY_FULL = FEATURES_ALL + ["exhibit", "tilt", "wind_inner", "wave_inn
 # 「節間の調子」を測るには節が短すぎる。データが増えたら
 # rolling_check_history() を回して再判断すること。
 FEATURES_HISTORY = FEATURES_TODAY_FULL + ["recent_st", "recent_rank", "course_shift"]
+FEATURES_TODAY_MACHINE = FEATURES_TODAY_FULL + FEATURES_MACHINE
+FEATURES_TODAY_EXHIBITION = FEATURES_TODAY_FULL + FEATURES_EXHIBITION
 
 # 0が「欠損」ではなく正当な値である特徴量。
 # F回数0は「フライング歴が無い」という情報であって、欠測ではない。
 # ここを取り違えると、きれいな選手が全員「平均並み」に潰れて信号が消える。
 # 風と波の交互作用も、内枠以外は定義上0になる。
 ZERO_IS_VALID = {"tilt", "f_count", "l_count", "wind_inner", "wave_inner",
-                 "course_shift"}
+                 "course_shift", "parts", "prop_new", "ex_gain"}
 
 
 HISTORY_WINDOW = 4
@@ -285,6 +313,22 @@ def attach_history(rows, window: int = HISTORY_WINDOW):
 
 def _raw_feature(r, name, row):
     """1艇ぶんの特徴量。大きいほど有利になる向きに符号を揃える。"""
+    if name in ("ex_st", "ex_gain"):
+        shown = {e["lane"]: e for e in (row.get("start_exhibition") or [])}
+        e = shown.get(r["lane"])
+        if not e:
+            return 0.0
+        if name == "ex_st":
+            st = e.get("st")
+            return -st if st is not None else 0.0
+        course = e.get("course")
+        return float(r["lane"] - course) if course else 0.0
+    if name == "parts":
+        # 部品交換があったか。何を何個換えたかまでは見ない。
+        # 品目ごとに分けると、1つあたりの観測が数十件に落ちる。
+        return 1.0 if r.get("parts") else 0.0
+    if name == "prop_new":
+        return 1.0 if r.get("propeller_new") else 0.0
     if name == "class":
         return CLASS_STRENGTH.get(r.get("class"), 0.5)
     if name == "st":
@@ -497,13 +541,30 @@ def rolling_check_history(rows, label="ロジット+履歴 vs ロジット+当�
     """
     履歴を足した効果を、分割位置を変えて確認する。
 
-    rolling_check と違い、比較相手も各分割で当てはめ直す。履歴の有無だけを
-    変えた2つのモデルを、同じ学習データから作って同じ検証データで比べないと、
-    差が「履歴の効果」なのか「学習量の違い」なのか分からない。
-
     2026年9月時点（1,236レース）では符号が反転する。最も古い分割位置では
     有意に悪化する。この不安定さが見えないと、たまたま良く出た分割位置だけを
     見て採用してしまう。
+    """
+    rolling_check_pair(rows, FEATURES_HISTORY, FEATURES_TODAY_FULL, label)
+
+
+def rolling_check_machine(rows, label="ロジット+機力 vs ロジット+当日全部"):
+    """部品交換・プロペラを足した効果を、分割位置を変えて確認する。"""
+    rolling_check_pair(rows, FEATURES_TODAY_MACHINE, FEATURES_TODAY_FULL, label)
+
+
+def rolling_check_exhibition(rows, label="ロジット+展示ST vs ロジット+当日全部"):
+    """スタート展示を足した効果を、分割位置を変えて確認する。"""
+    rolling_check_pair(rows, FEATURES_TODAY_EXHIBITION, FEATURES_TODAY_FULL, label)
+
+
+def rolling_check_pair(rows, names_a, names_b, label):
+    """
+    2つの特徴量セットの差を、分割位置を変えて確認する。
+
+    rolling_check と違い、比較相手も各分割で当てはめ直す。片方の有無だけを
+    変えた2つのモデルを、同じ学習データから作って同じ検証データで比べないと、
+    差が「その特徴量の効果」なのか「学習量の違い」なのか分からない。
     """
     dates = sorted({r["date"] for r in rows})
     print(f"--- {label}: 分割位置を変えた再確認 ---")
@@ -514,8 +575,8 @@ def rolling_check_history(rows, label="ロジット+履歴 vs ロジット+当�
         test = [r for r in rows if r["date"] >= dates[cut]]
         if len(train) < 150 or len(test) < 150:
             continue
-        a = make_logit(fit_logit(train, FEATURES_HISTORY))
-        b = make_logit(fit_logit(train, FEATURES_TODAY_FULL))
+        a = make_logit(fit_logit(train, names_a))
+        b = make_logit(fit_logit(train, names_b))
         diff, se, n = paired_diff(test, a, b)
         if se == 0:
             continue
@@ -548,11 +609,15 @@ def main():
     m_today = fit_logit(fit_rows, FEATURES_TODAY)
     m_full = fit_logit(fit_rows, FEATURES_TODAY_FULL)
     m_hist = fit_logit(fit_rows, FEATURES_HISTORY)
+    m_mach = fit_logit(fit_rows, FEATURES_TODAY_MACHINE)
+    m_exhi = fit_logit(fit_rows, FEATURES_TODAY_EXHIBITION)
     report_coefficients(m_cur, "ロジット(現行特徴)")
     report_coefficients(m_all, "ロジット(全特徴)")
     report_coefficients(m_today, "ロジット+展示")
     report_coefficients(m_full, "ロジット+当日全部")
     report_coefficients(m_hist, "ロジット+履歴")
+    report_coefficients(m_mach, "ロジット+機力")
+    report_coefficients(m_exhi, "ロジット+展示ST")
 
     candidates = {
         "市場オッズ":            market,
@@ -569,6 +634,8 @@ def main():
         "ロジット+展示":          make_logit(m_today),
         "ロジット+当日全部":       make_logit(m_full),
         "ロジット+履歴":          make_logit(m_hist),
+        "ロジット+機力":          make_logit(m_mach),
+        "ロジット+展示ST":         make_logit(m_exhi),
     }
 
     if not test:
@@ -583,7 +650,222 @@ def main():
     rolling_check(rows, FEATURES_TODAY_FULL,
                   make_model(w_class=1.0, w_venue=0.5), "ロジット+当日全部 vs 本番モデル")
     rolling_check_history(rows)
+    rolling_check_machine(rows)
+    rolling_check_exhibition(rows)
+    _machine_coverage(rows)
+    blend_check(rows)
+    trifecta_blend_check(rows)
     _noise_note(len(test))
+
+
+def blend_check(rows, steps=21):
+    """
+    公開する確率を「市場オッズとモデルの混合」にしたとき、重みをいくつにすべきか。
+
+    背景。三連単の推奨買い目のEVが軒並み2〜5倍になっていた。EVは
+    モデル確率/市場確率/1.335 なので、市場より33%多く確率を置くだけで1.0を超える。
+    実測（2026-09-06の30レース）ではモデルと市場の1着確率の食い違いが中央値18.3pt
+    あり、3連単のLogLossでは市場に +0.678 ± 0.265 で負けていた。**EVの大きさは
+    市場の見落としではなく、こちらのずれの大きさを映していた。**
+
+    混合すれば、ずれの分だけ市場へ引き戻せる。w=0で市場そのもの、w=1でモデル単独。
+
+        線形     p = (1-w)·市場 + w·モデル
+        対数線形 p ∝ 市場^(1-w) · モデル^w
+
+    **wは学習側で選び、検証側で採点する。** 検証側で選んで検証側で報告すると、
+    21通りの中から一番良かったものを選んだぶんだけ良く見える。
+    """
+    from scraper.scoring import estimate_win_prob
+
+    cache = []
+    for row in rows:
+        k = {int(x): v for x, v in row["market_prob"].items()}
+        m = estimate_win_prob(row["racers"], row.get("venue"), row.get("conditions"))
+        if not k or not m:
+            continue
+        cache.append((row["date"], k, m, row["winner_lane"]))
+    if not cache:
+        return
+
+    def blended(k, m, w, kind):
+        if kind == "linear":
+            p = {l: (1 - w) * k.get(l, 0.0) + w * m.get(l, 0.0) for l in range(1, 7)}
+        else:
+            p = {l: math.exp((1 - w) * math.log(max(k.get(l, 1e-9), 1e-9))
+                             + w * math.log(max(m.get(l, 1e-9), 1e-9)))
+                 for l in range(1, 7)}
+        total = sum(p.values())
+        return {l: v / total for l, v in p.items()} if total > 0 else k
+
+    def losses(part, w, kind):
+        return [-math.log(max(blended(k, m, w, kind).get(win, 1e-9), 1e-9))
+                for _, k, m, win in part]
+
+    def mean(v):
+        return sum(v) / len(v) if v else 0.0
+
+    def paired(a, b):
+        d = [x - y for x, y in zip(a, b)]
+        n = len(d)
+        if n < 2:
+            return 0.0, 0.0
+        mu = sum(d) / n
+        var = sum((x - mu) ** 2 for x in d) / (n - 1)
+        return mu, math.sqrt(var / n)
+
+    dates = sorted({d for d, _, _, _ in cache})
+    cut = dates[len(dates) // 2]
+    train = [c for c in cache if c[0] < cut]
+    test = [c for c in cache if c[0] >= cut]
+    if not train or not test:
+        return
+
+    grid = [i / (steps - 1) for i in range(steps)]
+    print(f"[市場との混合] 学習{len(train)} / 検証{len(test)}レース")
+    print("  wは学習側で選び、検証側で採点する。")
+    print()
+
+    chosen = {}
+    for kind, label in (("linear", "線形"), ("log", "対数線形")):
+        best = min(grid, key=lambda w: mean(losses(train, w, kind)))
+        chosen[kind] = best
+        ll_test = losses(test, best, kind)
+        ll_market = losses(test, 0.0, kind)
+        ll_model = losses(test, 1.0, kind)
+        d_market, se_market = paired(ll_test, ll_market)
+        d_model, se_model = paired(ll_test, ll_model)
+        print(f"  {label}: 学習側で選ばれた w = {best:.2f}")
+        print(f"    検証LogLoss  市場 {mean(ll_market):.4f} / "
+              f"モデル {mean(ll_model):.4f} / 混合 {mean(ll_test):.4f}")
+        print(f"    混合 - 市場   {d_market:+.4f} ± {se_market:.4f}"
+              f"   {_verdict(d_market, se_market)}")
+        print(f"    混合 - モデル {d_model:+.4f} ± {se_model:.4f}"
+              f"   {_verdict(d_model, se_model)}")
+        print()
+
+    # 分割位置を変えても同じ重みが選ばれるか。1つの分割で決めた重みは、
+    # その分割に合わせただけかもしれない。
+    print("  分割位置を変えたときに学習側で選ばれる w")
+    for cut_i in range(max(1, len(dates) - 5), len(dates)):
+        c = dates[cut_i]
+        tr = [x for x in cache if x[0] < c]
+        te = [x for x in cache if x[0] >= c]
+        if len(tr) < 50 or len(te) < 50:
+            continue
+        row = [c]
+        for kind in ("linear", "log"):
+            w = min(grid, key=lambda w: mean(losses(tr, w, kind)))
+            row.append(f"{w:.2f}")
+        print(f"    {row[0]}  線形 {row[1]}  対数線形 {row[2]}")
+    print()
+
+
+def trifecta_blend_check(rows, steps=21):
+    """
+    三連単の目の単位で、市場との混合の重みを検証する。
+
+    blend_check は1着の確率で測っている。画面に出しているのは三連単の
+    推奨買い目なので、採点も三連単の的中目で行う必要がある。1着で誤差の
+    範囲でも、3つの掛け算になると差が開く。
+
+    市場の三連単確率は120通りのオッズの逆数を正規化して作る。**この確率は
+    着順の相関を含んでいる**（まくられた艇が3着に残る、といった結びつき）。
+    trifecta_probs の Plackett-Luce 展開はそれを持たないので、混合は
+    その弱点を埋める働きもする。
+
+    オッズのページはキャッシュ済みのものだけを読む。取りに行かない。
+    1400レースぶんの解析に数分かかる。
+    """
+    from scraper.odds import get_odds
+    from scraper.session import cached
+    from scraper.scoring import estimate_win_prob, trifecta_probs
+
+    data = []
+    for row in rows:
+        params = {"rno": row["race_no"], "jcd": row["venue"], "hd": row["date"]}
+        if cached("/owpc/pc/race/odds3t", params) is None:
+            continue
+        fin = row.get("finish") or {}
+        top3 = sorted(((int(l), int(pos)) for l, pos in fin.items()
+                       if 1 <= int(pos) <= 3), key=lambda t: t[1])
+        if len(top3) != 3:
+            continue
+        odds = get_odds(row["date"], row["venue"], row["race_no"])
+        if not odds or not odds["odds"]:
+            continue
+        inv = {k: 1.0 / v for k, v in odds["odds"].items() if v}
+        total = sum(inv.values())
+        if total <= 0:
+            continue
+        market = {k: v / total for k, v in inv.items()}
+        m = estimate_win_prob(row["racers"], row.get("venue"), row.get("conditions"))
+        if not m:
+            continue
+        model = trifecta_probs(m)
+        combo = "-".join(str(l) for l, _ in top3)
+        if combo in market and combo in model:
+            data.append((row["date"], market[combo], model[combo]))
+
+    if len(data) < 100:
+        print(f"[三連単の混合] キャッシュ済みのオッズが{len(data)}件しかないため省略")
+        return
+
+    dates = sorted({d for d, _, _ in data})
+    cut = dates[len(dates) // 2]
+    train = [d for d in data if d[0] < cut]
+    test = [d for d in data if d[0] >= cut]
+    if not train or not test:
+        return
+
+    def losses(part, w):
+        return [-math.log(max((1 - w) * k + w * m, 1e-12)) for _, k, m in part]
+
+    grid = [i / (steps - 1) for i in range(steps)]
+    best = min(grid, key=lambda w: sum(losses(train, w)) / len(train))
+    base = losses(test, 0.0)
+    print(f"[三連単の混合] 学習{len(train)} / 検証{len(test)}レース"
+          f"  学習側で選ばれた w = {best:.2f}")
+    print(f"  {'w':>4} {'検証LogLoss':>12} {'市場との差':>12} {'':>8} {'判定':>10}")
+    for i in range(0, 11):
+        w = i / 10
+        ll = losses(test, w)
+        diff = [a - b for a, b in zip(ll, base)]
+        n = len(diff)
+        mean = sum(diff) / n
+        se = (sum((x - mean) ** 2 for x in diff) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
+        mark = " ← 採用" if abs(w - BLEND_WEIGHT) < 1e-9 else ""
+        print(f"  {w:>4.1f} {sum(ll)/n:>12.4f} {mean:>+12.4f} ± {se:.4f}"
+              f" {_verdict(mean, se):>10}{mark}")
+    print()
+
+
+def _verdict(diff, se):
+    if se == 0:
+        return "-"
+    if abs(diff) < 2 * se:
+        return "誤差の範囲"
+    return "改善" if diff < 0 else "悪化"
+
+
+def _machine_coverage(rows):
+    """
+    部品交換とプロペラ交換がどれだけ観測されているか。
+
+    これが薄いと、効かなくても「情報が無いのか、情報に価値が無いのか」を
+    区別できない。履歴特徴量で一度その判断を間違えかけたので、先に見る。
+    """
+    boats = [r for row in rows for r in row["racers"]]
+    if not boats:
+        return
+    n = len(boats)
+    parts = sum(1 for r in boats if r.get("parts"))
+    prop = sum(1 for r in boats if r.get("propeller_new"))
+    print(f"[機力] 延べ{n}艇  部品交換 {parts} ({parts/n*100:.1f}%)  "
+          f"プロペラ新品 {prop} ({prop/n*100:.1f}%)")
+    if parts == 0 and prop == 0:
+        print("       付いていない。py -3 backtest.py backfill-machine を先に走らせること。")
+    print()
 
 
 def _history_coverage(rows):
