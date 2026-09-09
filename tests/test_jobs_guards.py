@@ -240,6 +240,41 @@ class WeatherIsRefreshedNearDeadline(unittest.TestCase):
         self.assertFalse(self._run(25), "揃っている行を遠いうちから取り直している")
 
 
+class ProvisionalIsClearedOnRaceDay(unittest.TestCase):
+    """
+    当日の予測で上書きしたら、暫定の印を消すこと。
+
+    **消し忘れると「暫定・直前情報なし」の表示が当日まで残る。** 当日の予測は
+    市場へ引き戻し済みで展示も気象も入っており、前日の粗い予測とは別物である。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def test_flag_is_removed_when_odds_arrive(self):
+        from datetime import datetime, timedelta
+
+        close = datetime.now() + timedelta(minutes=10)
+        venue = {"code": "05", "name": "多摩川"}
+        racers = [{"lane": i, "class": "B1", "win_rate_all": 5.0,
+                   "win_rate_venue": 5.0, "avg_st": 0.16, "motor_in2_rate": 35.0,
+                   "boat_in2_rate": 35.0, "weight": 52.0, "f_count": 0,
+                   "in2_rate_all": 30.0} for i in range(1, 7)]
+        data = {"venues": [{"code": "05", "name": "多摩川", "races": [
+            {"race_no": 1, "racers": racers, "provisional": True}]}]}
+        odds = {"market_prob": {i: 1 / 6 for i in range(1, 7)},
+                "overround": 1.335, "odds": {"1-2-3": 9.6}}
+
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times",
+                               return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=odds),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+            jobs.prerace(30, "20260910", strict=False, report_late=False)
+
+        slot = data["venues"][0]["races"][0]
+        self.assertNotIn("provisional", slot)
+        self.assertIn("picks", slot)
+
+
 class LoopIntervalGuard(unittest.TestCase):
     """
     窓に対して間隔が粗い設定では起動しないこと。

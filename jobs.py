@@ -360,6 +360,11 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
                             slot.get("conditions"), slot.get("odds"))
         if scores:
             slot.update(scores)
+            # 前日に暫定として出した行を、当日の予測で上書きしている。
+            # **印を消さないと「暫定」の表示が当日まで残る。** 当日の予測は
+            # 市場へ引き戻し済みで展示も気象も入っているので、別物である。
+            if market_prob:
+                slot.pop("provisional", None)
             # その予測を出したモデルが市場オッズを上回っていたかの記録。
             # 2026-09-07 まではこれが公開の門番を兼ねていたが、予想を出す
             # 方針に変わったので、今は後から成績を追うための印として残す。
