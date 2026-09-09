@@ -490,6 +490,10 @@ def results(date_str: str = None):
                 "finish": result["finish"],
                 "kimarite": result["kimarite"],
                 "payouts": result["payouts"],
+                # 進入コースと本番ST。同じページに載っているので取得は増えない。
+                # ここに残しておくと backtest.py import-daily がそのまま使え、
+                # バックテスト用に結果ページを取り直さずに済む。
+                "start": result.get("start") or [],
             }
             count += 1
         _save(data)

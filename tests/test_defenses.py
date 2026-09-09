@@ -29,45 +29,80 @@ class RateLimit(unittest.TestCase):
     """
     2秒間隔が、成功時だけでなく失敗時にも効くこと。
 
-    以前は raise_for_status の後ろに sleep があった。呼び出し側が例外を
-    握って次に進む経路（backtest.collect の except Exception）では、
+    間隔はリクエストの「前」に置いてある。以前は取得のあとに固定で眠らせて
+    いたが、呼び出し側が例外を握って次に進む経路（backtest.collect の
+    except Exception）では、待ちが前の失敗の直後にしか効かなかった。
     サイトが5xxを返している間ずっと待ち時間ゼロで連射することになる。
-    相手が弱っているときに一番強く叩く形なので、必ず待たせる。
+    相手が弱っているときに一番強く叩く形なので、次を出す側で必ず待たせる。
     """
 
-    def _fetch(self, responder):
-        """fetch を、ネットワークに出ずに走らせる。戻り値は sleep の呼ばれ方。"""
+    def setUp(self):
+        session._last_request_at = 0.0
+
+    def _fetch(self, responder, slept, clock):
+        """fetch を、ネットワークに出ずに走らせる。"""
         fake = mock.Mock()
         fake.get.side_effect = responder
-        with mock.patch.object(session, "get_session", return_value=fake), \
-             mock.patch.object(session.time, "sleep") as slept:
+        with mock.patch.object(session, "get_session", return_value=fake),              mock.patch.object(session.time, "sleep", slept),              mock.patch.object(session.time, "monotonic", clock):
             try:
                 # 当日のパラメータにしてキャッシュ経路に入らないようにする
                 session.fetch("/owpc/pc/race/racelist", params={"rno": 1, "jcd": "05"})
             except Exception as e:
-                return slept, e
-            return slept, None
+                return e
+            return None
 
-    def test_sleeps_after_success(self):
+    def _clock(self, times):
+        """monotonic の戻り値を順に返す。足りなくなったら最後の値を返し続ける。"""
+        seq = list(times)
+        def now():
+            return seq.pop(0) if len(seq) > 1 else seq[0]
+        return now
+
+    def test_waits_between_requests(self):
         ok = mock.Mock(status_code=200, content=b"<html></html>")
         ok.raise_for_status.return_value = None
-        slept, err = self._fetch(lambda *a, **k: ok)
-        self.assertIsNone(err)
-        slept.assert_called_once_with(session.SLEEP_SEC)
+        slept = mock.Mock()
+        # 1件目を100.0に出し、0.4秒で応答。2件目はその0.4秒後に呼ばれる。
+        clock = self._clock([100.0, 100.0, 100.4, 102.0])
+        self.assertIsNone(self._fetch(lambda *a, **k: ok, slept, clock))
+        slept.assert_not_called()          # 初回は待たない
+        self.assertIsNone(self._fetch(lambda *a, **k: ok, slept, clock))
+        waited = slept.call_args[0][0]
+        self.assertAlmostEqual(waited, session.SLEEP_SEC - 0.4, places=6,
+                               msg="応答にかかった時間が待ちに吸収されていない")
 
-    def test_sleeps_even_when_server_errors(self):
+    def test_waits_even_after_server_error(self):
         bad = mock.Mock(status_code=503)
         bad.raise_for_status.side_effect = requests.HTTPError("503")
-        slept, err = self._fetch(lambda *a, **k: bad)
-        self.assertIsInstance(err, requests.HTTPError)
-        slept.assert_called_once_with(session.SLEEP_SEC)
+        slept = mock.Mock()
+        clock = self._clock([100.0, 100.0, 100.1, 102.0])
+        self.assertIsInstance(self._fetch(lambda *a, **k: bad, slept, clock),
+                              requests.HTTPError)
+        # 失敗を握って即座に次を出しても、間隔は縮まらない
+        self.assertIsInstance(self._fetch(lambda *a, **k: bad, slept, clock),
+                              requests.HTTPError)
+        self.assertAlmostEqual(slept.call_args[0][0], session.SLEEP_SEC - 0.1,
+                               places=6)
 
-    def test_sleeps_even_on_timeout(self):
+    def test_waits_even_after_timeout(self):
         def boom(*a, **k):
             raise requests.Timeout("timed out")
-        slept, err = self._fetch(boom)
-        self.assertIsInstance(err, requests.Timeout)
-        slept.assert_called_once_with(session.SLEEP_SEC)
+        slept = mock.Mock()
+        clock = self._clock([100.0, 100.0, 100.5, 102.0])
+        self.assertIsInstance(self._fetch(boom, slept, clock), requests.Timeout)
+        self.assertIsInstance(self._fetch(boom, slept, clock), requests.Timeout)
+        self.assertAlmostEqual(slept.call_args[0][0], session.SLEEP_SEC - 0.5,
+                               places=6)
+
+    def test_slow_response_does_not_add_delay(self):
+        """応答に2秒以上かかったら、次はもう待たない。既に間隔が空いている。"""
+        ok = mock.Mock(status_code=200, content=b"<html></html>")
+        ok.raise_for_status.return_value = None
+        slept = mock.Mock()
+        clock = self._clock([100.0, 100.0, 105.0, 105.0])
+        self._fetch(lambda *a, **k: ok, slept, clock)
+        self._fetch(lambda *a, **k: ok, slept, clock)
+        slept.assert_not_called()
 
     def test_cache_hit_does_not_sleep(self):
         """キャッシュから返すときは待たない。サイトを叩いていないため。"""

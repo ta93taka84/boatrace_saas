@@ -7,6 +7,7 @@
   py -3 backtest.py calibrate 20260825 20260901  # 場別コース勝率を書き出す
   py -3 backtest.py backfill-start              # 進入コースとSTをキャッシュから後付け
   py -3 backtest.py backfill-machine            # 部品交換と前走をキャッシュから後付け
+  py -3 backtest.py import-daily                # 日次ファイルから取り込む（通信なし）
 
 collect は過去日のみキャッシュされるため、eval と calibrate は
 サイトを叩き直さずに何度でも再実行できる。較正のパラメータを
@@ -34,6 +35,7 @@ from scraper.session import cached
 from scraper.scoring import estimate_win_prob, COURSE_BASE_WIN_RATE
 
 DATASET = Path("output/backtest.jsonl")
+OUTPUT_DIR = DATASET.parent  # 毎日のジョブが日次ファイルを書く場所
 RACE_COUNT = 12
 
 
@@ -432,7 +434,13 @@ def backfill_start():
     スタート展示のほうは締切前に分かるので、予測の特徴量にできる。
     """
     rows = [json.loads(l) for l in DATASET.read_text(encoding="utf-8").splitlines() if l.strip()]
-    todo = [r for r in rows if r.get("start") is None or r.get("finish") is None]
+    # **スタート展示も対象条件に入れること。** collect が結果ページから
+    # start と finish を先に埋めるようになったので、この2つだけを見ていると
+    # 新しく集めた行が「もう付いている」と判定され、展示だけ空のまま残る。
+    # 実際に2,304件中1,068件が展示なしになった。
+    todo = [r for r in rows
+            if r.get("start") is None or r.get("finish") is None
+            or r.get("start_exhibition") is None]
     print(f"{len(rows)}件のうち {len(todo)}件にスタート情報と着順を付ける（キャッシュのみ）")
 
     got_start = got_ex = miss_start = miss_ex = 0
@@ -465,6 +473,70 @@ def backfill_start():
     total_ex = sum(1 for r in rows if r.get("start_exhibition"))
     total_fin = sum(1 for r in rows if r.get("finish"))
     print(f"保有状況      : 本番 {total_start}/{len(rows)} / 展示 {total_ex}/{len(rows)} / 着順 {total_fin}/{len(rows)}")
+
+
+def import_daily():
+    """
+    output/ の日次ファイルから、バックテスト用の行を作る。**通信しない。**
+
+    毎日のジョブは、締切前のレースについて出走表・直前情報・オッズを取得し、
+    終了後に結果を取得している。**同じページを collect で取り直すのは、
+    CLAUDE.md の「同じ情報を二度取りに行かない」に反する。** ここで拾えば、
+    その日ぶんの再収集がまるごと不要になる。
+
+    取り込むのは市場勝率と結果の両方が揃った行だけ。日次ファイルには
+    締切前に訪問できなかったレースも入っており、そちらはオッズが無い。
+    足りない行は collect が従来どおり取りに行く。
+    """
+    existing = _existing_keys()
+    rows = []
+    for path in sorted(OUTPUT_DIR.glob("2*.json")):
+        day = json.loads(path.read_text(encoding="utf-8"))
+        date_str = str(day.get("date") or path.stem)
+        for venue in day.get("venues", []):
+            for race in venue.get("races", []):
+                key = f"{date_str}-{venue['code']}-{race['race_no']}"
+                if key in existing:
+                    continue
+                result = race.get("result") or {}
+                if not race.get("market_prob") or not result.get("winner_lane"):
+                    continue
+                # スタート展示は艇ごとの列として持っているので、行の形を
+                # collect と揃えるためにここで組み直す。
+                exhibition = [
+                    {"course": r["ex_course"], "lane": r["lane"], "st": r.get("ex_st")}
+                    for r in race.get("racers", [])
+                    if r.get("ex_course")
+                ]
+                rows.append({
+                    "date": date_str,
+                    "venue": venue["code"],
+                    "venue_name": venue.get("name", ""),
+                    "race_no": race["race_no"],
+                    "racers": race.get("racers", []),
+                    "market_prob": race["market_prob"],
+                    "conditions": race.get("conditions"),
+                    "winner_lane": result["winner_lane"],
+                    "finish": result.get("finish") or {},
+                    "kimarite": result.get("kimarite"),
+                    "start": result.get("start") or [],
+                    "start_exhibition": exhibition,
+                    "trifecta_payout": (result.get("payouts") or {})
+                        .get("3連単", {}).get("payout"),
+                })
+                existing.add(key)
+
+    if not rows:
+        print("取り込む行がありません（日次ファイルに未取得の行が無い）")
+        return
+
+    with DATASET.open("a", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + chr(10))
+    print(f"日次ファイルから {len(rows)}件を取り込んだ（通信なし）")
+    missing = sum(1 for r in rows if not r["start"])
+    if missing:
+        print(f"  うち進入コースが空: {missing}件（backfill-start で埋まる）")
 
 
 def backfill_machine():
@@ -543,5 +615,7 @@ if __name__ == "__main__":
         backfill_start()
     elif cmd == "backfill-machine":
         backfill_machine()
+    elif cmd == "import-daily":
+        import_daily()
     else:
         print(__doc__)
