@@ -200,7 +200,23 @@ export default async function RacePage({
       )}
       {hasModel && (
         <div className="card">
-          <h3>AI予想</h3>
+          <h3>
+            AI予想
+            {race.provisional && (
+              <span
+                className="muted"
+                style={{ fontSize: 12, fontWeight: 400, marginLeft: 10 }}
+              >
+                暫定・直前情報なし
+              </span>
+            )}
+          </h3>
+          {race.provisional && (
+            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+              前日時点の予測です。展示タイム・気象・オッズが出ていないため、
+              期待値と買い目は出していません。当日になると更新されます。
+            </p>
+          )}
           {topPick?.value != null && (
             <p
               style={{
@@ -241,6 +257,11 @@ export default async function RacePage({
 
             <div>
               <p className="sub">推奨買い目（3連単）</p>
+              {race.provisional && (
+                <p className="muted" style={{ fontSize: 13 }}>
+                  オッズが公開されてから算出します。
+                </p>
+              )}
               {picks.length > 0 ? (
                 <div className="scroll-x">
                   <table>
@@ -266,7 +287,7 @@ export default async function RacePage({
                     </tbody>
                   </table>
                 </div>
-              ) : (
+              ) : race.provisional ? null : (
                 <p className="muted" style={{ fontSize: 13 }}>
                   オッズが取れていないため算出していません
                 </p>

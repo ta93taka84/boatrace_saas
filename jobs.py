@@ -77,6 +77,10 @@ def _path(date_str: str) -> Path:
     return OUTPUT_DIR / f"{date_str}.json"
 
 
+def _tomorrow_date() -> str:
+    return (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+
+
 def _load(date_str: str) -> dict:
     """既存の日次JSONを読む。ジョブは追記的に同じファイルを育てる。"""
     p = _path(date_str)
@@ -186,6 +190,73 @@ def morning(date_str: str = None):
             print(f"  - {p}")
         if len(problems) > 20:
             print(f"  ... 他{len(problems) - 20}件")
+        sys.exit(1)
+
+
+def tomorrow(date_str: str = None):
+    """
+    翌日の出走表を取り、予測だけを先に出す。
+
+    **出せるのは予測確率までで、期待値と推奨買い目は出せない。** 三連単の
+    オッズは前日には公開されていない（2026-09-09 に実際に叩いて確認した。
+    開催場と出走表は取れるが、odds3t は返らない）。オッズが無いということは、
+    公開している確率を市場へ引き戻す先も無いということなので、翌日の予測は
+    **モデル単独の生の値**になる。当日の予測（市場へ2割引き戻し、展示タイムと
+    気象を織り込み済み）とは別物である。
+
+    検証1,212レースでの差:
+      当日情報あり（配備構成）  1.1902
+      出走表だけ               1.2059
+
+    そのため provisional=True を刻む。画面はこの印を見て「暫定」と明示し、
+    期待値と買い目を出さない。**印を外さないこと。** 外すと、質の違う2種類の
+    予測が同じ「AI予想」として混ざる。
+    """
+    date_str = date_str or _tomorrow_date()
+    data = _load(date_str)
+    venues = get_active_venues(date_str)
+    if not venues:
+        print(f"[異常] {date_str}: {NO_VENUE_HINT}")
+        sys.exit(1)
+    print(f"[{date_str}] 翌日 {len(venues)}場")
+
+    count = 0
+    problems = []
+    for venue in venues:
+        times = get_close_times(date_str, venue["code"])
+        for rno in range(1, RACE_COUNT + 1):
+            racelist = get_racelist(date_str, venue["code"], rno)
+            if not racelist:
+                continue
+            slot = _race_slot(data, venue, rno)
+            slot["racers"] = racelist["racers"]
+            if rno in times:
+                slot["closes_at"] = times[rno]
+            problems += _racer_problems(f"{venue['name']} {rno}R", racelist["racers"])
+
+            # オッズが無いので market_prob は渡さない。score_race は
+            # pub_prob にモデル単独の値をそのまま入れ、ev と picks を返さない。
+            scores = score_race(slot.get("racers", []), None, venue["code"], None)
+            if scores:
+                slot.update(scores)
+                slot["calibrated"] = CALIBRATED
+                slot["provisional"] = True
+                count += 1
+        _save(data)
+        print(f"  {venue['name']} 完了 (累計{count}レース)")
+
+    print(f"翌日予測完了: {count}レース")
+    print(f"  {_sync_to_db(date_str)}")
+
+    if count == 0:
+        print("[異常] 1レースも予測できなかった。出走表が取れていない可能性が高い。")
+        sys.exit(1)
+
+    if problems:
+        print()
+        print("[異常] 出走表の値がありえない範囲にあります。")
+        for p in problems[:20]:
+            print(f"  - {p}")
         sys.exit(1)
 
 
@@ -611,6 +682,8 @@ if __name__ == "__main__":
         prerace(window, date_arg)
     elif cmd == "prerace-loop":
         prerace_loop(until, interval, window, date_arg)
+    elif cmd == "tomorrow":
+        tomorrow(date_arg)
     elif cmd == "results":
         results(date_arg)
     else:

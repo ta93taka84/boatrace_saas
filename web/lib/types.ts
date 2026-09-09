@@ -72,6 +72,11 @@ export interface Race {
   pub_prob?: Record<string, number>;
   /** 市場へどれだけ引き戻したか。0で市場そのまま、1でモデル単独。 */
   blend_weight?: number;
+  /**
+   * 前日に出した暫定予測か。翌日ぶんは三連単オッズが公開されていないため、
+   * 市場へ引き戻せず、展示タイムも気象も無い。期待値と買い目は出さない。
+   */
+  provisional?: boolean;
   ev?: Record<string, number>;
   top_lane?: number;
   top_ev?: number;

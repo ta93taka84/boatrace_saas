@@ -273,5 +273,69 @@ class LoopIntervalGuard(unittest.TestCase):
             jobs.prerace_loop("00:01", interval_min=15, window_min=30)
 
 
+class TomorrowJob(unittest.TestCase):
+    """
+    翌日ぶんの暫定予測。
+
+    **オッズが前日に公開されないので、期待値と買い目は出せない。** 市場へ
+    引き戻す先も無いため、公開する確率はモデル単独の生の値になる。当日の
+    予測とは質が違うので provisional の印が要る。印が落ちると、質の違う
+    2種類が同じ「AI予想」として混ざる。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    RACERS = [
+        {"lane": i, "class": "B1", "win_rate_all": 5.0, "win_rate_venue": 5.0,
+         "avg_st": 0.16, "motor_in2_rate": 35.0, "boat_in2_rate": 35.0,
+         "weight": 52.0, "f_count": 0, "l_count": 0, "in2_rate_all": 30.0,
+         "name": f"選手{i}", "racer_id": str(i), "branch": "東京", "age": 30,
+         "motor_no": i, "boat_no": i, "in3_rate_all": 50.0,
+         "in2_rate_venue": 30.0, "in3_rate_venue": 50.0}
+        for i in range(1, 7)
+    ]
+
+    def _run(self):
+        data = {"venues": []}
+        venue = {"code": "05", "name": "多摩川"}
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times", return_value={1: "11:00"}),              mock.patch.object(jobs, "get_racelist",
+                               side_effect=lambda d, v, r: (
+                                   {"race_no": r, "racers": self.RACERS}
+                                   if r == 1 else None)),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"),              mock.patch.object(jobs, "_sync_to_db", return_value="(取り込み省略)"):
+            jobs.tomorrow("20260910")
+        return data["venues"][0]["races"][0]
+
+    def test_marks_provisional(self):
+        self.assertTrue(self._run().get("provisional"))
+
+    def test_has_probabilities_but_no_expected_value(self):
+        slot = self._run()
+        self.assertAlmostEqual(sum(slot["pub_prob"].values()), 1.0, places=2)
+        self.assertNotIn("ev", slot)
+        self.assertNotIn("picks", slot)
+        self.assertNotIn("top_ev", slot)
+
+    def test_published_probability_is_the_model_itself(self):
+        """引き戻す市場が無いので、公開確率はモデル単独の値と一致する。"""
+        slot = self._run()
+        self.assertEqual(slot["pub_prob"], slot["model_prob"])
+
+    def test_no_venue_exits(self):
+        with mock.patch.object(jobs, "get_active_venues", return_value=[]):
+            with self.assertRaises(SystemExit) as cm:
+                jobs.tomorrow("20260910")
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_no_race_exits(self):
+        """1レースも取れなければ失敗にする。0件で正常終了させない。"""
+        venue = {"code": "05", "name": "多摩川"}
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times", return_value={}),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"),              mock.patch.object(jobs, "_sync_to_db", return_value=""):
+            with self.assertRaises(SystemExit) as cm:
+                jobs.tomorrow("20260910")
+        self.assertEqual(cm.exception.code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

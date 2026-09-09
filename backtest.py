@@ -464,10 +464,22 @@ def backfill_start():
 
         html = cached("/owpc/pc/race/raceresult", result_params(*key))
         parsed = parse_result(html, row["race_no"]) if html else None
-        row["start"] = (parsed or {}).get("start") or []
+        # **既にある値を空で塗り潰さないこと。** collect は結果ページから
+        # start と finish を取って行に入れている。ここでキャッシュが無いときに
+        # 無条件で [] を書くと、その行が持っていたデータを消す。実際に
+        # 2026-09-09、当日ぶん132件の進入コースと着順を消した（当日のページは
+        # キャッシュされないため、必ずこの経路に入る）。
+        # 空を入れてよいのは、そもそも持っていない行だけ。
+        if parsed and parsed.get("start"):
+            row["start"] = parsed["start"]
+        else:
+            row.setdefault("start", [])
         # 着順は勝者だけでなく全艇ぶん要る。直近の調子を「勝ったかどうか」
         # だけで測ると、6艇中1艇しか当たりが無いので情報がほとんど残らない。
-        row["finish"] = (parsed or {}).get("finish") or {}
+        if parsed and parsed.get("finish"):
+            row["finish"] = parsed["finish"]
+        else:
+            row.setdefault("finish", {})
         if row["start"]:
             got_start += 1
         else:
@@ -475,7 +487,10 @@ def backfill_start():
 
         html = cached("/owpc/pc/race/beforeinfo", beforeinfo_params(*key))
         parsed = parse_beforeinfo(html, row["race_no"]) if html else None
-        row["start_exhibition"] = (parsed or {}).get("start_exhibition") or []
+        if parsed and parsed.get("start_exhibition"):
+            row["start_exhibition"] = parsed["start_exhibition"]
+        else:
+            row.setdefault("start_exhibition", [])
         if row["start_exhibition"]:
             got_ex += 1
         else:

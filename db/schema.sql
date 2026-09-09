@@ -161,6 +161,11 @@ create table if not exists predictions (
   top_lane       smallint,
   top_ev         numeric(6,3),
 
+  -- 前日に出した暫定予測か。翌日ぶんは三連単オッズが公開されていないので、
+  -- 市場へ引き戻せず、展示タイムも気象も無い。当日の予測とは質が違うので、
+  -- 画面はこの印を見て「暫定」と明示し、期待値と買い目を出さない。
+  provisional    boolean not null default false,
+
   -- 公開した確率。model_prob を市場オッズへ blend_weight ぶん引き戻したもの。
   -- 画面に出るのはこちら。model_prob はモデル単独の出力として残す。
   pub_prob       jsonb,
@@ -185,6 +190,7 @@ create table if not exists predictions (
 alter table predictions add column if not exists picks jsonb;
 alter table predictions add column if not exists pub_prob jsonb;
 alter table predictions add column if not exists blend_weight numeric(4,2);
+alter table predictions add column if not exists provisional boolean not null default false;
 
 create index if not exists predictions_version_idx
   on predictions (model_version, created_at desc);

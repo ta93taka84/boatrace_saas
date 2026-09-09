@@ -270,8 +270,8 @@ def _upsert_prediction(cur, race_id, race):
         """
         insert into predictions (race_id, model_version, model_prob, ev,
                                  top_lane, top_ev, picks, pub_prob,
-                                 blend_weight, calibrated)
-        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                 blend_weight, provisional, calibrated)
+        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (race_id, model_version) do update set
           model_prob = excluded.model_prob,
           ev         = excluded.ev,
@@ -280,6 +280,7 @@ def _upsert_prediction(cur, race_id, race):
           picks        = excluded.picks,
           pub_prob     = excluded.pub_prob,
           blend_weight = excluded.blend_weight,
+          provisional  = excluded.provisional,
           calibrated = excluded.calibrated,
           created_at = now()
         """,
@@ -290,6 +291,7 @@ def _upsert_prediction(cur, race_id, race):
          Jsonb(race["picks"]) if race.get("picks") else None,
          Jsonb(_str_keys(race["pub_prob"])) if race.get("pub_prob") else None,
          race.get("blend_weight"),
+         bool(race.get("provisional")),
          CALIBRATED),
     )
 

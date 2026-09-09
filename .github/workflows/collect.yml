@@ -29,6 +29,12 @@ name: collect
 #
 # results は遅延で日付が変わっても前日を対象にするようjobs.py側で判定している。
 #
+# tomorrow は翌日の出走表を取り、予測確率だけを先に出す。三連単のオッズは
+# 前日には公開されないので、期待値と買い目は出せない。市場へ引き戻す先も
+# 無いためモデル単独の生の値になる。画面はその印（provisional）を見て
+# 「暫定」と明示する。22:30 JST に置いてあるのは、その時刻には翌日の
+# 出走表が公開されていることを実測で確認したため。
+#
 # 注意: スケジュール実行はリポジトリが60日間無活動になると自動で停止する。
 #       停止したらGitHubのUIから手動で再有効化が必要。
 
@@ -39,6 +45,7 @@ on:
     - cron: '30 4 * * *'       # 13:30 JST 直前情報ループ → 17:30 まで
     - cron: '30 8 * * *'       # 17:30 JST 直前情報ループ → 21:40 まで
     - cron: '0 13 * * *'       # 22:00 JST 確定結果
+    - cron: '30 13 * * *'      # 22:30 JST 翌日の出走表と暫定予測
   workflow_dispatch:
     inputs:
       job:
@@ -47,7 +54,7 @@ on:
         default: prerace
         type: choice
         # prerace は1回だけ走る動作確認用。本番は prerace-loop。
-        options: [morning, prerace, prerace-loop, results]
+        options: [morning, prerace, prerace-loop, results, tomorrow]
       until:
         # cronが飛んだ時間帯を手動で埋めるときに使う。既定のまま昼過ぎに
         # 起動すると6時間の上限に当たって打ち切られるので、次の定時起動の
@@ -99,6 +106,7 @@ jobs:
             case "${{ github.event.schedule }}" in
               '0 0 * * *')   echo "job=morning" >> "$GITHUB_OUTPUT" ;;
               '0 13 * * *')  echo "job=results" >> "$GITHUB_OUTPUT" ;;
+              '30 13 * * *') echo "job=tomorrow" >> "$GITHUB_OUTPUT" ;;
               '30 0 * * *')  echo "job=prerace-loop" >> "$GITHUB_OUTPUT"
                              echo "until=13:30" >> "$GITHUB_OUTPUT" ;;
               '30 4 * * *')  echo "job=prerace-loop" >> "$GITHUB_OUTPUT"
@@ -146,6 +154,12 @@ jobs:
             prerace)
               # 1回だけ走る動作確認用。本番のスケジュールは prerace-loop。
               python jobs.py prerace --window 40 "$DATE"
+              ;;
+            tomorrow)
+              # 対象は翌日なので、当日の DATE を渡さない。jobs.py 側が
+              # 自分で翌日を求める。オッズは前日に公開されないため、
+              # 出るのは予測確率だけ（provisional=true が刻まれる）。
+              python jobs.py tomorrow
               ;;
             *)
               python jobs.py "$JOB" "$DATE"

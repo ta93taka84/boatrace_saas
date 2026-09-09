@@ -47,7 +47,8 @@ export async function getDay(date: string): Promise<DayData | null> {
        race_results ( winner_lane, finish, kimarite, payouts ),
        odds_snapshots ( overround, market_prob, captured_at ),
        predictions ( model_prob, ev, top_lane, top_ev, picks,
-                     pub_prob, blend_weight, calibrated, created_at )`
+                     pub_prob, blend_weight, provisional, calibrated,
+                     created_at )`
     )
     // **新しいモデルを配備すると、1レースに複数の予測行が並ぶ。**
     // model_version ごとに1行入るので、順序を指定しないと古いモデルの予測が
@@ -148,6 +149,7 @@ function toRace(row: any): Race {
     race.picks = prediction.picks ?? undefined;
     race.pub_prob = prediction.pub_prob ?? undefined;
     race.blend_weight = prediction.blend_weight ?? undefined;
+    race.provisional = prediction.provisional ?? undefined;
   }
 
   if (result) {
