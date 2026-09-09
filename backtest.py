@@ -21,8 +21,6 @@ import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 from bs4 import XMLParsedAsHTMLWarning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
@@ -37,6 +35,23 @@ from scraper.scoring import estimate_win_prob, COURSE_BASE_WIN_RATE
 DATASET = Path("output/backtest.jsonl")
 OUTPUT_DIR = DATASET.parent  # 毎日のジョブが日次ファイルを書く場所
 RACE_COUNT = 12
+
+
+def _use_utf8_stdio():
+    """
+    Windowsのコンソールでも日本語が化けないようにする。
+
+    **import時ではなく、スクリプトとして起動されたときだけ呼ぶこと。**
+    以前はモジュールの先頭で無条件に実行していた。この形だと、複数の
+    モジュールを同じプロセスに読み込んだときに TextIOWrapper が二重にかかり、
+    どちらか一方が終了時に閉じられた瞬間、もう一方が
+    「I/O operation on closed file」で落ちる。実際に、テストが backtest と
+    jobs の両方を読み込んだ時点でスイートが終了コード1になった。
+    """
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
 
 
 def daterange(start: str, end: str):
@@ -596,6 +611,7 @@ def _write_all(rows):
 
 
 if __name__ == "__main__":
+    _use_utf8_stdio()
     args = sys.argv[1:]
     if not args:
         print(__doc__)

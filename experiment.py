@@ -16,7 +16,6 @@ from pathlib import Path
 
 from scraper.scoring import BLEND_WEIGHT
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 DATASET = Path("output/backtest.jsonl")
 
@@ -26,6 +25,23 @@ COURSE_BASE = {1: 0.55, 2: 0.145, 3: 0.12, 4: 0.105, 5: 0.055, 6: 0.025}
 # 全国勝率と相関はあるが、勝率は出走数の少ない選手ほどぶれるため、
 # 級別が独立した情報を持つ可能性がある。
 CLASS_STRENGTH = {"A1": 1.0, "A2": 0.72, "B1": 0.5, "B2": 0.35}
+
+
+def _use_utf8_stdio():
+    """
+    Windowsのコンソールでも日本語が化けないようにする。
+
+    **import時ではなく、スクリプトとして起動されたときだけ呼ぶこと。**
+    以前はモジュールの先頭で無条件に実行していた。この形だと、複数の
+    モジュールを同じプロセスに読み込んだときに TextIOWrapper が二重にかかり、
+    どちらか一方が終了時に閉じられた瞬間、もう一方が
+    「I/O operation on closed file」で落ちる。実際に、テストが backtest と
+    jobs の両方を読み込んだ時点でスイートが終了コード1になった。
+    """
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
 
 
 def load():
@@ -959,4 +975,5 @@ def _noise_note(n: int):
 
 
 if __name__ == "__main__":
+    _use_utf8_stdio()
     main()

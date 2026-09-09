@@ -11,8 +11,6 @@ import sys
 import warnings
 
 # Windows cp932環境でもUTF-8出力を強制
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 # lxml HTML警告を抑制（boatrace.jpはHTML、警告は誤検知）
 from bs4 import XMLParsedAsHTMLWarning
@@ -29,6 +27,23 @@ from scraper.scoring import score_race, CALIBRATED
 
 RACE_COUNT = 12  # 通常1場12レース
 OUTPUT_DIR = Path("output")
+
+
+def _use_utf8_stdio():
+    """
+    Windowsのコンソールでも日本語が化けないようにする。
+
+    **import時ではなく、スクリプトとして起動されたときだけ呼ぶこと。**
+    以前はモジュールの先頭で無条件に実行していた。この形だと、複数の
+    モジュールを同じプロセスに読み込んだときに TextIOWrapper が二重にかかり、
+    どちらか一方が終了時に閉じられた瞬間、もう一方が
+    「I/O operation on closed file」で落ちる。実際に、テストが backtest と
+    jobs の両方を読み込んだ時点でスイートが終了コード1になった。
+    """
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
 
 
 def run(date_str: str, fetch_before: bool = False):
@@ -134,6 +149,7 @@ def _print_summary(result: dict):
 
 
 if __name__ == "__main__":
+    _use_utf8_stdio()
     args = sys.argv[1:]
     fetch_before = "--before" in args
     args = [a for a in args if not a.startswith("--")]

@@ -31,8 +31,6 @@ import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 from bs4 import XMLParsedAsHTMLWarning
 
@@ -52,6 +50,23 @@ RACE_COUNT = 12
 # 風速・波高は開催中に変わり、モデルはその2つを使っている。巡回間隔と
 # 同じ値にしてあるので、最後の1周だけが取り直す形になる。
 BEFOREINFO_REFRESH_MIN = 15
+
+
+def _use_utf8_stdio():
+    """
+    Windowsのコンソールでも日本語が化けないようにする。
+
+    **import時ではなく、スクリプトとして起動されたときだけ呼ぶこと。**
+    以前はモジュールの先頭で無条件に実行していた。この形だと、複数の
+    モジュールを同じプロセスに読み込んだときに TextIOWrapper が二重にかかり、
+    どちらか一方が終了時に閉じられた瞬間、もう一方が
+    「I/O operation on closed file」で落ちる。実際に、テストが backtest と
+    jobs の両方を読み込んだ時点でスイートが終了コード1になった。
+    """
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8",
+                                  errors="replace", line_buffering=True)
 
 
 def _today() -> str:
@@ -571,6 +586,7 @@ def results(date_str: str = None):
 
 
 if __name__ == "__main__":
+    _use_utf8_stdio()
     args = sys.argv[1:]
     if not args:
         print(__doc__)
