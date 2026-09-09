@@ -17,7 +17,11 @@ from urllib.parse import urlparse
 import psycopg
 from psycopg.types.json import Jsonb
 
-MODEL_VERSION = "baseline-v1"
+# 係数を取り直したり特徴量を入れ替えたりしたら、必ずこの名前を変えること。
+# model_performance ビューはこの名前で成績をまとめるので、同じ名前のまま
+# 中身を変えると、別のモデルの予測が1つの成績として混ざる。
+# logit-2026-09: 全2,304レース(15日)で当てはめ、wind_inner と in2_rate_all を外した版。
+MODEL_VERSION = "logit-2026-09"
 
 
 def connect():

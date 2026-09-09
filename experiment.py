@@ -266,6 +266,15 @@ FEATURES_MACHINE = ["parts", "prop_new"]
 # 再挑戦するなら、直近の走りそのものではなく、既存の特徴量が持っていない軸
 # （同じモーターが節の中でどう変わったか、など）を探すこと。
 FEATURES_HISTORY = FEATURES_TODAY_FULL + ["recent_st", "recent_rank", "course_shift"]
+# 実際に配備している構成。FEATURES_TODAY_FULL から2つ落としてある。
+# wind_inner は2,304レースで当てはめると符号が正へ反転し（風が内枠を助ける
+# ことになる）、in2_rate_all はほぼ0。どちらも外しても差が出ない
+# （+0.0001 ± 0.0002 と -0.0001 ± 0.0001、12分割すべて誤差の範囲）。
+# **誤差に埋もれるなら単純なほうを採る。** scraper/scoring.py の
+# LOGIT_WEIGHTS はこの構成で当てはめた係数を持っている。
+FEATURES_DEPLOYED = [f for f in FEATURES_TODAY_FULL
+                     if f not in ("wind_inner", "in2_rate_all")]
+
 FEATURES_TODAY_MACHINE = FEATURES_TODAY_FULL + FEATURES_MACHINE
 FEATURES_TODAY_EXHIBITION = FEATURES_TODAY_FULL + FEATURES_EXHIBITION
 
@@ -638,6 +647,7 @@ def main():
     m_hist = fit_logit(fit_rows, FEATURES_HISTORY)
     m_mach = fit_logit(fit_rows, FEATURES_TODAY_MACHINE)
     m_exhi = fit_logit(fit_rows, FEATURES_TODAY_EXHIBITION)
+    m_dep = fit_logit(fit_rows, FEATURES_DEPLOYED)
     report_coefficients(m_cur, "ロジット(現行特徴)")
     report_coefficients(m_all, "ロジット(全特徴)")
     report_coefficients(m_today, "ロジット+展示")
@@ -663,6 +673,7 @@ def main():
         "ロジット+履歴":          make_logit(m_hist),
         "ロジット+機力":          make_logit(m_mach),
         "ロジット+展示ST":         make_logit(m_exhi),
+        "配備構成":               make_logit(m_dep),
     }
 
     if not test:

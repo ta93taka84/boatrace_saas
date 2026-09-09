@@ -76,9 +76,6 @@ class FeatureDirections(unittest.TestCase):
     def test_boat(self):
         self.assertRaises_prob({"boat_in2_rate": 55.0}, "ボートが良いほど有利")
 
-    def test_in2_rate_all(self):
-        self.assertRaises_prob({"in2_rate_all": 60.0}, "2連対率が高いほど有利")
-
     def test_class(self):
         self.assertRaises_prob({"class": "A1"}, "A1はB1より有利")
         self.assertLowers_prob({"class": "B2"}, "B2はB1より不利")
@@ -169,7 +166,14 @@ class InnerInteraction(unittest.TestCase):
             )
 
     def test_rough_water_reduces_inner_advantage(self):
-        """荒れると内枠の優位が削られる。重みは両方とも負。"""
+        """
+        荒れると内枠の優位が削られる。
+
+        2026-09-09 に風の項（wind_inner）は外した。2,304レースで当てはめると
+        符号が正へ反転し、風が内枠を助けることになってしまう。外しても差は
+        出なかった（+0.0001 ± 0.0002）ので、単純なほうを採った。
+        いま効いているのは波高だけなので、風を動かしても確率は変わらない。
+        """
         calm = self._p({"wind_speed": 1.0, "wave_height": 1.0})
         rough = self._p({"wind_speed": 8.0, "wave_height": 12.0})
         self.assertLess(rough[1], calm[1], "荒れたら1号艇の確率は下がる")
@@ -185,8 +189,8 @@ class WeightsCoverage(unittest.TestCase):
 
     TESTED = {
         "win_rate_all", "class", "win_rate_venue", "st", "motor_in2_rate",
-        "boat_in2_rate", "weight", "f_count", "in2_rate_all", "exhibit",
-        "tilt", "wind_inner", "wave_inner",
+        "boat_in2_rate", "weight", "f_count", "exhibit",
+        "tilt", "wave_inner",
     }
 
     def test_every_weight_has_a_direction_test(self):

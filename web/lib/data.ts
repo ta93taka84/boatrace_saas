@@ -47,8 +47,12 @@ export async function getDay(date: string): Promise<DayData | null> {
        race_results ( winner_lane, finish, kimarite, payouts ),
        odds_snapshots ( overround, market_prob, captured_at ),
        predictions ( model_prob, ev, top_lane, top_ev, picks,
-                     pub_prob, blend_weight, calibrated )`
+                     pub_prob, blend_weight, calibrated, created_at )`
     )
+    // **新しいモデルを配備すると、1レースに複数の予測行が並ぶ。**
+    // model_version ごとに1行入るので、順序を指定しないと古いモデルの予測が
+    // 画面に出ることがある。新しい順に並べて先頭を採る。
+    .order("created_at", { referencedTable: "predictions", ascending: false })
     .eq("race_date", iso(date))
     .order("race_no");
   if (error) throw new Error(`getDay: ${error.message}`);
