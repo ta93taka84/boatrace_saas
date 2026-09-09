@@ -169,12 +169,20 @@ def morning(date_str: str = None):
         sys.exit(1)
 
 
-def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> list:
+def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
+            report_late: bool = True) -> list:
     """
     締切が window_min 分以内に迫ったレースだけ直前情報とオッズを取る。
 
     strict=False にすると欠損があっても異常終了せず、問題の一覧を返すだけにする。
     ループ実行の途中で落とすと、その日の残り時間の収集がまるごと失われるため。
+
+    **締切を過ぎてから取得したレースは問題として報告する。** 予測が締切後に
+    入っても誰も使えないので、これは「取れた」ではなく劣化である。通知は
+    失敗時にしか飛ばないため、ここで問題に数えないと気づけない。
+    report_late=False にすると数えるだけで報告しない。ループの1周目は、
+    起動が遅れた時点で手遅れのレースが混ざるのが構造上避けられないため、
+    そこだけ外す（2周目以降の手遅れは、こちらの取り方の問題である）。
     """
     date_str = date_str or _today()
     data = _load(date_str)
@@ -210,9 +218,20 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
     if not targets:
         return []
 
+    late = []
+    leads = []
     for venue, rno, hhmm in targets:
         slot = _race_slot(data, venue, rno)
         slot["closes_at"] = hhmm
+
+        # 対象に選んだ時点では締切前でも、順番待ちの間に過ぎることがある。
+        # 取りに行く直前に測り直す。
+        close_at = datetime.combine(now.date(), datetime.strptime(hhmm, "%H:%M").time())
+        lead = (close_at - datetime.now()).total_seconds() / 60
+        leads.append(lead)
+        if lead < 0:
+            late.append(f"{venue['name']} {rno}R: 締切{hhmm} を"
+                        f"{-lead:.0f}分過ぎてから取得した")
 
         # morningが失敗していると出走表が無く、展示タイムのマージ先も
         # 予測の入力も存在しないまま黙って空データが積み上がる。
@@ -257,8 +276,19 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
         print(f"  {venue['name']} {rno}R (締切{hhmm}) 取得完了")
         _save(data)
 
-    print(f"直前情報取得完了: {len(targets)}レース")
+    if leads:
+        ordered = sorted(leads)
+        print(f"直前情報取得完了: {len(targets)}レース "
+              f"(締切までの余裕 中央値{ordered[len(ordered) // 2]:.0f}分 / "
+              f"最小{ordered[0]:.0f}分)")
+    else:
+        print(f"直前情報取得完了: {len(targets)}レース")
     problems = _healthcheck(data, targets)
+    if late:
+        for line in late:
+            print(f"  [劣化] {line}")
+        if report_late:
+            problems.extend(late)
     if problems and strict:
         sys.exit(1)
     return problems
@@ -395,6 +425,15 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 20,
 
     各パスの直後にDBへ取り込むので、画面は20分ごとに新しくなる。
     """
+    # **窓に対して間隔が粗いと、締切前に一度しか見ないレースが出る。**
+    # 1周に数分かかるので、その一度が順番待ちで締切を過ぎると手遅れになる。
+    # 2回は見られる設定でなければ、そもそも起動しない。
+    if interval_min * 2 > window_min:
+        print(f"[異常] 巡回間隔 {interval_min}分 が窓 {window_min}分 に対して粗い。"
+              f" 締切前に一度しか見ないレースが出るため起動しない。"
+              f" 間隔は窓の半分以下にすること。")
+        sys.exit(1)
+
     date_str = date_str or _today()
     now = datetime.now()
     end = datetime.combine(now.date(), datetime.strptime(until_hhmm, "%H:%M").time())
@@ -432,7 +471,10 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 20,
         try:
             # 1パスの失敗でループを止めると、その日の残り時間の収集が
             # すべて失われる。記録だけして次のパスへ進む。
-            problems = prerace(window_min, date_str, strict=False)
+            # 1周目の手遅れは起動の遅れによるもので、こちらの取り方の問題では
+            # ない。2周目以降で手遅れが出たら、それは順番か間隔の問題である。
+            problems = prerace(window_min, date_str, strict=False,
+                               report_late=passes > 1)
             failures.extend(f"pass {passes}: {x}" for x in problems)
             if problems:
                 print("  ※ 欠損があるが、収集は続行する")

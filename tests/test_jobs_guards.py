@@ -156,5 +156,69 @@ class SkipCompleteBeforeinfo(unittest.TestCase):
         self.assertFalse(jobs._has_beforeinfo(slot))
 
 
+class LateFetchIsReported(unittest.TestCase):
+    """
+    締切を過ぎてから取得したレースを、問題として数えること。
+
+    **通知は失敗時にしか飛ばない。** 予測が締切後に入るのは「取れた」ではなく
+    劣化だが、ここで問題に数えないと、その日ずっと手遅れのまま誰も気づかない。
+    実際に2026-09-09、90レース中5レースが締切後に入っていた。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, report_late):
+        from datetime import datetime as real_datetime, timedelta
+
+        start = real_datetime.now().replace(second=0, microsecond=0)
+        close = start + timedelta(minutes=1)
+
+        class FakeDatetime(real_datetime):
+            """now() だけ差し替える。combine と strptime は本物のまま使う。"""
+            seq = [start, start + timedelta(minutes=3)]
+
+            @classmethod
+            def now(cls, tz=None):
+                return cls.seq.pop(0) if len(cls.seq) > 1 else cls.seq[0]
+
+        venue = {"code": "05", "name": "多摩川"}
+        with mock.patch.object(jobs, "datetime", FakeDatetime),              mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times",
+                               return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"):
+            return jobs.prerace(30, "20260909", strict=False,
+                                report_late=report_late)
+
+    def test_late_fetch_becomes_a_problem(self):
+        problems = self._run(report_late=True)
+        self.assertTrue(any("締切" in p and "過ぎてから取得" in p for p in problems),
+                        f"締切後の取得が問題に数えられていない: {problems}")
+
+    def test_first_pass_does_not_report(self):
+        """1周目の手遅れは起動の遅れによるもので、取り方の問題ではない。"""
+        problems = self._run(report_late=False)
+        self.assertFalse(any("過ぎてから取得" in p for p in problems))
+
+
+class LoopIntervalGuard(unittest.TestCase):
+    """
+    窓に対して間隔が粗い設定では起動しないこと。
+
+    1周に数分かかるので、締切前に一度しか見ないレースは、その一度が
+    順番待ちで締切を過ぎると手遅れになる。2回は見られる設定を強制する。
+    """
+
+    def test_coarse_interval_exits(self):
+        with self.assertRaises(SystemExit) as cm:
+            jobs.prerace_loop("21:40", interval_min=20, window_min=30)
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_half_of_window_is_allowed(self):
+        """間隔が窓の半分ちょうどは通す（2回見られる）。"""
+        with mock.patch.object(jobs, "_close_schedule", return_value=[]),              mock.patch.object(jobs, "prerace", return_value=[]),              mock.patch.object(jobs, "_sync_to_db", return_value=""):
+            # 終了時刻を過ぎた状態にして、ループ本体には入らせない
+            jobs.prerace_loop("00:01", interval_min=15, window_min=30)
+
+
 if __name__ == "__main__":
     unittest.main()
