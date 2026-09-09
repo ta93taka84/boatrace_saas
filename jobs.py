@@ -196,9 +196,17 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
         for rno, hhmm in times.items():
             close_at = datetime.combine(now.date(), datetime.strptime(hhmm, "%H:%M").time())
             if now <= close_at <= deadline:
-                targets.append((venue, rno, hhmm))
+                targets.append((close_at, venue, rno, hhmm))
 
-    print(f"[{date_str}] 対象 {len(targets)}レース (締切{window_min}分以内)")
+    # **締切の早い順に取る。** 場ごとに並べたままだと、2分後に締切のレースが
+    # 10レース待ちの最後尾に回ることがある。1レースあたり数秒かかるので、
+    # 締切を過ぎてからオッズが入る。実測（2026-09-09）で、その日オッズが
+    # 取れた90レースのうち5レースが締切後、11レースが締切5分前だった。
+    # 締切を過ぎた予測は、画面に出ても誰も使えない。
+    targets.sort(key=lambda t: t[0])
+    targets = [(venue, rno, hhmm) for _, venue, rno, hhmm in targets]
+
+    print(f"[{date_str}] 対象 {len(targets)}レース (締切{window_min}分以内・締切順)")
     if not targets:
         return []
 
@@ -215,7 +223,11 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
                 slot["racers"] = racelist["racers"]
                 print(f"  ! {venue['name']} {rno}R: 出走表が無かったため取得した")
 
-        before = get_beforeinfo(date_str, venue["code"], rno)
+        # 展示と気象が揃っているレースは取り直さない。展示タイムは一度出れば
+        # 動かないので、2周目以降は1リクエストぶん無駄になる。ここを削ると
+        # 巡回の間隔を詰めても取得量が増えず、締切に近いオッズが取れる。
+        before = None if _has_beforeinfo(slot) else get_beforeinfo(
+            date_str, venue["code"], rno)
         if before:
             slot["conditions"] = {
                 k: before[k] for k in (
@@ -250,6 +262,14 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True) -> 
     if problems and strict:
         sys.exit(1)
     return problems
+
+
+def _has_beforeinfo(slot: dict) -> bool:
+    """直前情報が揃っているか。気象と、全艇の展示タイムが入っていること。"""
+    if not slot.get("conditions"):
+        return False
+    racers = slot.get("racers") or []
+    return bool(racers) and all(r.get("exhibit_time") is not None for r in racers)
 
 
 def _racer_problems(label: str, racers: list) -> list:

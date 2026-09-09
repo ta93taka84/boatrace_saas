@@ -91,5 +91,70 @@ class NormalEmptyTargets(unittest.TestCase):
         self.assertEqual(problems, [])
 
 
+class DeadlineOrder(unittest.TestCase):
+    """
+    締切の早いレースから取ること。
+
+    場ごとに並べたままだと、2分後に締切のレースが10レース待ちの最後尾に
+    回る。1レースあたり数秒かかるので、締切を過ぎてからオッズが入る。
+    実測（2026-09-09）で、その日オッズが取れた90レースのうち5レースが
+    締切後、11レースが締切5分前だった。**締切を過ぎた予測は誰も使えない。**
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def test_targets_are_fetched_in_deadline_order(self):
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        # 場の並び（A→B）と締切の並び（B→A）が逆になるように置く
+        far = (now + timedelta(minutes=25)).strftime("%H:%M")
+        near = (now + timedelta(minutes=5)).strftime("%H:%M")
+        venues = [{"code": "01", "name": "遅い場"}, {"code": "02", "name": "早い場"}]
+        times = {"01": {1: far}, "02": {1: near}}
+
+        fetched = []
+
+        def odds(date_str, venue_code, rno):
+            fetched.append(venue_code)
+            return None
+
+        with mock.patch.object(jobs, "get_active_venues", return_value=venues),              mock.patch.object(jobs, "get_close_times",
+                               side_effect=lambda d, code: times[code]),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", side_effect=odds),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"):
+            jobs.prerace(30, "20260909", strict=False)
+
+        self.assertEqual(fetched, ["02", "01"],
+                         "締切の早い場より先に、遅い場を取りに行っている")
+
+
+class SkipCompleteBeforeinfo(unittest.TestCase):
+    """
+    展示と気象が揃っている行は、直前情報を取り直さないこと。
+
+    展示タイムは一度出れば動かない。巡回の間隔を詰めたときに、
+    2周目以降でこれを取り直すと取得量がそのまま倍になる。
+    """
+
+    def test_complete_slot_is_skipped(self):
+        slot = {
+            "conditions": {"weather": "曇り"},
+            "racers": [{"lane": i, "exhibit_time": 6.8} for i in range(1, 7)],
+        }
+        self.assertTrue(jobs._has_beforeinfo(slot))
+
+    def test_missing_exhibit_time_is_not_skipped(self):
+        slot = {
+            "conditions": {"weather": "曇り"},
+            "racers": [{"lane": 1, "exhibit_time": 6.8}, {"lane": 2}],
+        }
+        self.assertFalse(jobs._has_beforeinfo(slot))
+
+    def test_missing_conditions_is_not_skipped(self):
+        slot = {"racers": [{"lane": 1, "exhibit_time": 6.8}]}
+        self.assertFalse(jobs._has_beforeinfo(slot))
+
+
 if __name__ == "__main__":
     unittest.main()
