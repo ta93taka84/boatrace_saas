@@ -19,7 +19,7 @@ GitHub Actionsの無料枠(private 2,000分/月)を使い切る。そのため
 使い方:
   py -3 jobs.py morning
   py -3 jobs.py prerace --window 40
-  py -3 jobs.py prerace-loop --until 21:40 --interval 20 --window 30
+  py -3 jobs.py prerace-loop --until 21:40 --interval 15 --window 30
   py -3 jobs.py results [YYYYMMDD]
   py -3 jobs.py target-date results   # 対象日だけを出力する
 """
@@ -47,6 +47,11 @@ from scraper.scoring import score_race, CALIBRATED
 
 OUTPUT_DIR = Path("output")
 RACE_COUNT = 12
+
+# 締切までこの分数を切ったら、展示が揃っていても直前情報を取り直す。
+# 風速・波高は開催中に変わり、モデルはその2つを使っている。巡回間隔と
+# 同じ値にしてあるので、最後の1周だけが取り直す形になる。
+BEFOREINFO_REFRESH_MIN = 15
 
 
 def _today() -> str:
@@ -242,11 +247,12 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
                 slot["racers"] = racelist["racers"]
                 print(f"  ! {venue['name']} {rno}R: 出走表が無かったため取得した")
 
-        # 展示と気象が揃っているレースは取り直さない。展示タイムは一度出れば
-        # 動かないので、2周目以降は1リクエストぶん無駄になる。ここを削ると
-        # 巡回の間隔を詰めても取得量が増えず、締切に近いオッズが取れる。
-        before = None if _has_beforeinfo(slot) else get_beforeinfo(
-            date_str, venue["code"], rno)
+        # 展示タイムは一度出れば動かないので、揃っている行は取り直さない。
+        # **ただし締切間際は必ず取り直す。** 風速と波高は開催中に変わるし、
+        # モデルはその2つを特徴量に使っている。揃った時点の気象で固定すると、
+        # 最後の予測が30分前の水面を見て出されることになる。
+        need_before = (not _has_beforeinfo(slot)) or lead <= BEFOREINFO_REFRESH_MIN
+        before = get_beforeinfo(date_str, venue["code"], rno) if need_before else None
         if before:
             slot["conditions"] = {
                 k: before[k] for k in (
@@ -410,7 +416,7 @@ def _sync_to_db(date_str: str) -> str:
     return "取り込み完了"
 
 
-def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 20,
+def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
                  window_min: int = 30, date_str: str = None):
     """
     prerace を指定時刻まで繰り返す。本番のスケジュールはこれを使う。
@@ -576,7 +582,7 @@ if __name__ == "__main__":
         return args[args.index(name) + 1] if name in args else default
 
     window = int(opt("--window", 40 if cmd == "prerace" else 30))
-    interval = int(opt("--interval", 20))
+    interval = int(opt("--interval", 15))
     until = opt("--until", "21:40")
     positional = [a for a in args[1:] if a.isdigit() and len(a) == 8]
     date_arg = positional[0] if positional else None

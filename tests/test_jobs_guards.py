@@ -200,6 +200,46 @@ class LateFetchIsReported(unittest.TestCase):
         self.assertFalse(any("過ぎてから取得" in p for p in problems))
 
 
+class WeatherIsRefreshedNearDeadline(unittest.TestCase):
+    """
+    展示が揃っていても、締切間際は直前情報を取り直すこと。
+
+    展示タイムは一度出れば動かないので、揃った行を毎周取り直すのは無駄だ。
+    **しかし風速と波高は開催中に変わり、モデルはその2つを使っている。**
+    揃った時点で固定すると、最後の予測が30分前の水面を見て出される。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, minutes_to_close):
+        from datetime import datetime, timedelta
+
+        close = (datetime.now() + timedelta(minutes=minutes_to_close))
+        venue = {"code": "05", "name": "多摩川"}
+        data = {"venues": [{
+            "code": "05", "name": "多摩川",
+            "races": [{
+                "race_no": 1,
+                "conditions": {"weather": "曇り", "wind_speed": 2},
+                "racers": [{"lane": i, "exhibit_time": 6.8} for i in range(1, 7)],
+            }],
+        }]}
+        called = []
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times",
+                               return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo",
+                               side_effect=lambda *a: called.append(a) or None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+            jobs.prerace(30, "20260909", strict=False, report_late=False)
+        return called
+
+    def test_refetched_when_close(self):
+        self.assertTrue(self._run(5), "締切間際なのに気象を取り直していない")
+
+    def test_skipped_when_far(self):
+        self.assertFalse(self._run(25), "揃っている行を遠いうちから取り直している")
+
+
 class LoopIntervalGuard(unittest.TestCase):
     """
     窓に対して間隔が粗い設定では起動しないこと。
@@ -212,6 +252,19 @@ class LoopIntervalGuard(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             jobs.prerace_loop("21:40", interval_min=20, window_min=30)
         self.assertEqual(cm.exception.code, 1)
+
+    def test_cli_defaults_are_valid(self):
+        """
+        **既定値そのものが歯止めに引っかかってはいけない。**
+        引数なしで prerace-loop を叩いたときに落ちる状態にしない。
+        """
+        import inspect
+
+        sig = inspect.signature(jobs.prerace_loop)
+        interval = sig.parameters["interval_min"].default
+        window = sig.parameters["window_min"].default
+        self.assertLessEqual(interval * 2, window,
+                             "既定の間隔が既定の窓に対して粗い")
 
     def test_half_of_window_is_allowed(self):
         """間隔が窓の半分ちょうどは通す（2回見られる）。"""

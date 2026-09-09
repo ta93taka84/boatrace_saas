@@ -141,7 +141,7 @@ jobs:
           DATE='${{ steps.date.outputs.date }}'
           case "$JOB" in
             prerace-loop)
-              python jobs.py prerace-loop --until '${{ steps.pick.outputs.until }}' --interval 10 --window 30 "$DATE"
+              python jobs.py prerace-loop --until '${{ steps.pick.outputs.until }}' --interval 15 --window 30 "$DATE"
               ;;
             prerace)
               # 1回だけ走る動作確認用。本番のスケジュールは prerace-loop。
