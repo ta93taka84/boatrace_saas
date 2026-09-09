@@ -65,7 +65,7 @@ export default function About() {
           並び順は変わりません。変わるのは期待値の目盛りだけです。
         </p>
         <p>
-          検証612レース（2026年8月29日〜9月1日）での成績です。
+          検証1,212レース（全2,304レース、2026年8月25日〜9月8日）での成績です。
           LogLossとBrierは小さいほど良い値です。
         </p>
         <div className="scroll-x">
@@ -81,21 +81,21 @@ export default function About() {
             <tbody>
               <tr>
                 <td className="l">市場オッズ</td>
-                <td className="num">1.167</td>
-                <td className="num">0.579</td>
-                <td className="num">56.4%</td>
+                <td className="num">1.135</td>
+                <td className="num">0.557</td>
+                <td className="num">59.3%</td>
               </tr>
               <tr>
                 <td className="l">当モデル</td>
-                <td className="num">1.266</td>
-                <td className="num">0.614</td>
-                <td className="num">55.1%</td>
+                <td className="num">1.190</td>
+                <td className="num">0.578</td>
+                <td className="num">58.5%</td>
               </tr>
               <tr>
                 <td className="l muted">コース基準のみ</td>
-                <td className="num muted">1.426</td>
-                <td className="num muted">0.679</td>
-                <td className="num muted">51.8%</td>
+                <td className="num muted">1.363</td>
+                <td className="num muted">0.650</td>
+                <td className="num muted">54.8%</td>
               </tr>
             </tbody>
           </table>
