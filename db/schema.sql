@@ -202,18 +202,31 @@ create index if not exists predictions_version_idx
 create or replace view model_performance as
 select
   p.model_version,
+  p.provisional,
   count(*)                                             as races,
-  avg((p.top_lane = r.winner_lane)::int)               as top_pick_hit_rate,
+
+  -- **本命（予測確率が最大の艇）の的中率。** モデルの見立てそのものを測る。
+  avg((
+    (select lane from generate_series(1, 6) as lane
+      order by coalesce(
+                 (coalesce(p.pub_prob, p.model_prob) ->> lane::text)::numeric, 0) desc
+      limit 1) = r.winner_lane)::int)                  as top_prob_hit_rate,
+
+  -- 最高EVの艇の的中率。**これはモデルの精度ではない。** EVは市場との比なので
+  -- 人気薄に寄る。低く出るのが正常で、精度の指標として読まないこと。
+  avg((p.top_lane = r.winner_lane)::int)               as top_ev_hit_rate,
+
+  -- 自信度まで含めた正しさ。**採否の判断はこちらで行う。**
   avg((
     select sum(power(
-      coalesce((p.model_prob ->> lane::text)::numeric, 0)
+      coalesce((coalesce(p.pub_prob, p.model_prob) ->> lane::text)::numeric, 0)
         - (case when lane = r.winner_lane then 1 else 0 end),
       2))
     from generate_series(1, 6) as lane
   ))                                                   as brier
 from predictions p
 join race_results r using (race_id)
-group by p.model_version;
+group by p.model_version, p.provisional;
 
 -- ------------------------------------------------------- オッズ推移（重複を畳む）
 -- odds_snapshots を「内容が動いた瞬間だけ」に畳んだビュー。推移を読むときは
