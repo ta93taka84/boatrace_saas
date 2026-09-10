@@ -372,5 +372,82 @@ class TomorrowJob(unittest.TestCase):
         self.assertEqual(cm.exception.code, 1)
 
 
+class ResultsDuringTheDay(unittest.TestCase):
+    """
+    レース終了直後に結果を取り込むこと。
+
+    以前は1日1回まとめて取っていたので、朝のレースの着順が画面に出るのは
+    夜だった。**取得量は増やさない。** 1レースにつき結果ページを1回取るのは
+    同じで、取る時刻が移るだけ。既に結果を持つ行は取りに行かない。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _schedule(self, minutes_ago):
+        from datetime import datetime, timedelta
+
+        t = (datetime.now() - timedelta(minutes=minutes_ago)).strftime("%H:%M")
+        return [({"code": "05", "name": "多摩川"}, {1: t})]
+
+    def _run(self, minutes_ago, slot):
+        data = {"venues": [{"code": "05", "name": "多摩川", "races": [slot]}]}
+        called = []
+        result = {"winner_lane": 1, "finish": {"1": 1}, "kimarite": "逃げ",
+                  "payouts": {}, "start": []}
+        with mock.patch.object(jobs, "get_result",
+                               side_effect=lambda *a: called.append(a) or result):
+            got = jobs.collect_finished(data, "20260910", self._schedule(minutes_ago))
+        return got, called, data["venues"][0]["races"][0]
+
+    def test_finished_race_is_fetched(self):
+        got, called, slot = self._run(30, {"race_no": 1})
+        self.assertEqual(got, 1)
+        self.assertEqual(len(called), 1)
+        self.assertEqual(slot["result"]["winner_lane"], 1)
+
+    def test_race_with_result_is_skipped(self):
+        got, called, _ = self._run(30, {"race_no": 1, "result": {"winner_lane": 2}})
+        self.assertEqual((got, called), (0, []))
+
+    def test_upcoming_race_is_not_fetched(self):
+        """締切前のレースを結果ページで叩かない。まだ何も無い。"""
+        got, called, _ = self._run(-20, {"race_no": 1})
+        self.assertEqual((got, called), (0, []))
+
+    def test_just_closed_race_waits(self):
+        """締切直後はまだ走っていない。数分待ってから取りに行く。"""
+        got, called, _ = self._run(1, {"race_no": 1})
+        self.assertEqual((got, called), (0, []))
+
+
+class ResultsJobEmptyDay(unittest.TestCase):
+    """
+    結果ジョブの0件。**正常な0件と異常な0件を取り違えないこと。**
+
+    パスが先に取り込んでいれば、このジョブの新規取得が0なのは望ましい状態。
+    一方、新規も既存も0なら、その日の結果が1つも無いということで異常。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, slot):
+        venue = {"code": "05", "name": "多摩川"}
+        data = {"venues": [{"code": "05", "name": "多摩川", "races": [slot]}]}
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_result", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+            jobs.results("20260910")
+
+    def test_all_already_collected_is_fine(self):
+        self._run({"race_no": 1, "result": {"winner_lane": 1}})
+
+    def test_nothing_at_all_exits(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._run({"race_no": 1})
+        self.assertEqual(cm.exception.code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

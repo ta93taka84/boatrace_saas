@@ -373,6 +373,13 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
         print(f"  {venue['name']} {rno}R (締切{hhmm}) 取得完了")
         _save(data)
 
+    # 締切を過ぎたレースの結果を、同じパスの中で取り込む。画面へ出るまでの
+    # 遅れが「夜まで」から「巡回の間隔」に縮まる。
+    finished = collect_finished(data, date_str, schedule)
+    if finished:
+        _save(data)
+        print(f"  結果を{finished}レース取り込んだ")
+
     if leads:
         ordered = sorted(leads)
         print(f"直前情報取得完了: {len(targets)}レース "
@@ -545,7 +552,10 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
         for _, times in _close_schedule(date_str) for hhmm in times.values()
     ]
     if closes:
-        end = min(end, max(closes) + timedelta(minutes=5))
+        # 最終レースの結果を取り込んでから終わる。締切の5分後に切り上げると、
+        # その日の最後のレースだけ着順が22時まで出ないことになる。
+        # RESULT_WAIT_MIN より長く取る。
+        end = min(end, max(closes) + timedelta(minutes=RESULT_WAIT_MIN + 9))
 
     # 開催スケジュールの取得だけで1〜2分かかる。now を取り直さないと
     # 「開始時刻はまだ終了時刻より前」に見えるのに1パスも回らない、
@@ -628,6 +638,55 @@ def _job_date(cmd: str) -> str:
     return _target_result_date() if cmd == "results" else _today()
 
 
+RESULT_WAIT_MIN = 6  # 締切から結果が出るまでの目安。レースは締切の数分後に発走する
+
+
+def _store_result(slot: dict, date_str: str, venue_code: str, rno: int) -> bool:
+    """結果ページを取り、行に入れる。取れなければ False。"""
+    result = get_result(date_str, venue_code, rno)
+    if not result or not result.get("winner_lane"):
+        return False
+    slot["result"] = {
+        "winner_lane": result["winner_lane"],
+        "finish": result["finish"],
+        "kimarite": result["kimarite"],
+        "payouts": result["payouts"],
+        # 進入コースと本番ST。同じページに載っているので取得は増えない。
+        # ここに残しておくと backtest.py import-daily がそのまま使え、
+        # バックテスト用に結果ページを取り直さずに済む。
+        "start": result.get("start") or [],
+    }
+    return True
+
+
+def collect_finished(data: dict, date_str: str, schedule: list) -> int:
+    """
+    締切を過ぎたレースの結果を取り込む。**まだ結果を持たない行だけ。**
+
+    以前は1日1回 results ジョブでまとめて取っていたので、朝のレースの着順が
+    画面に出るのは夜になってからだった。prerace のパスごとにここを通せば、
+    レース終了からおよそ15分（巡回の間隔）で画面に出る。
+
+    **取得量は増えない。** 1レースにつき結果ページを1回取るのは以前と同じで、
+    取る時刻が夜からレース直後に移るだけである。既に結果を持つ行は飛ばす。
+    """
+    now = datetime.now()
+    got = 0
+    for venue, times in schedule:
+        for rno, hhmm in times.items():
+            close_at = datetime.combine(now.date(),
+                                        datetime.strptime(hhmm, "%H:%M").time())
+            if now < close_at + timedelta(minutes=RESULT_WAIT_MIN):
+                continue
+            slot = _race_slot(data, venue, rno)
+            if slot.get("result"):
+                continue
+            if _store_result(slot, date_str, venue["code"], rno):
+                got += 1
+                print(f"  結果 {venue['name']} {rno}R 取得")
+    return got
+
+
 def results(date_str: str = None):
     """その日の確定結果を取得する。全レース終了後に1回走らせる。"""
     date_str = date_str or _target_result_date()
@@ -638,27 +697,31 @@ def results(date_str: str = None):
         sys.exit(1)
 
     count = 0
+    already = 0
     for venue in venues:
         for rno in range(1, RACE_COUNT + 1):
-            result = get_result(date_str, venue["code"], rno)
-            if not result:
-                continue
             slot = _race_slot(data, venue, rno)
-            slot["result"] = {
-                "winner_lane": result["winner_lane"],
-                "finish": result["finish"],
-                "kimarite": result["kimarite"],
-                "payouts": result["payouts"],
-                # 進入コースと本番ST。同じページに載っているので取得は増えない。
-                # ここに残しておくと backtest.py import-daily がそのまま使え、
-                # バックテスト用に結果ページを取り直さずに済む。
-                "start": result.get("start") or [],
-            }
-            count += 1
+            # **既に持っている行は取りに行かない。** prerace のパスがレース直後に
+            # 取り込んでいるので、ここで全レースを取り直すと同じページを二度
+            # 取ることになる。このジョブは取りこぼしの受け皿として残す。
+            if slot.get("result"):
+                already += 1
+                continue
+            if _store_result(slot, date_str, venue["code"], rno):
+                count += 1
         _save(data)
         print(f"  {venue['name']} 完了 (累計{count}レース)")
 
-    print(f"結果取得完了: {count}レース")
+    print(f"結果取得完了: {count}レース（取得済みで飛ばした {already}レース）")
+
+    # **0件でも、既に持っている行があるなら正常。** prerace のパスが
+    # レース直後に取り込んでいるので、このジョブが何もすることが無いのは
+    # 望ましい状態である。一方、新規も既存も0なら、その日の結果が1つも
+    # 無いということなので異常。通知は失敗時にしか飛ばない。
+    if count == 0 and already == 0:
+        print(f"[異常] {date_str}: 結果が1レースも無い。"
+              " 結果ページの体裁が変わったか、収集が丸ごと失敗している。")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
