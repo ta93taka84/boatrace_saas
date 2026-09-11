@@ -879,6 +879,131 @@ def trifecta_blend_check(rows, steps=21):
     print()
 
 
+def order_correlation(rows, third=True, prior=3.0):
+    """
+    着順の結びつきを実測する。**三連単の展開を改善する唯一の当たりだった。**
+
+    trifecta_probs の Plackett-Luce 展開は「1着を抜いた残りに同じ強さを当てる」
+    独立な形で、着順の相関を持たない。実際には無視できない偏りがある。
+
+      1着5 → 2着6   PLの想定の 3.21倍
+      1着4 → 2着6   2.92倍
+      1着4 → 2着1   0.59倍   ← 4号艇がまくると1号艇は沈む
+
+    外が勝つときは外が続き、内が沈む。まくりの道連れという物理的に筋の通る構造。
+
+    戻り値は (2着の補正表, 3着の補正表)。どちらも
+    「実測回数 ÷ PLが与える期待回数」を、観測の薄い組み合わせのために
+    prior で縮小したもの。1.0なら偏り無し。
+
+    **必ず学習側だけから作ること。** 検証側の着順から作った表で検証側を
+    採点すると、答えを見て答え合わせをすることになる。
+    """
+    from scraper.scoring import estimate_win_prob
+
+    n2, d2, n3, d3 = {}, {}, {}, {}
+    for row in rows:
+        order = _finish_order(row)
+        probs = estimate_win_prob(row["racers"], row.get("venue"),
+                                  row.get("conditions"))
+        if not order or not probs:
+            continue
+        first, second = order[0], order[1]
+        rest = 1.0 - probs.get(first, 0.0)
+        if rest <= 1e-6:
+            continue
+        for lane in probs:
+            if lane == first:
+                continue
+            d2[(first, lane)] = d2.get((first, lane), 0.0) + probs[lane] / rest
+            if lane == second:
+                n2[(first, lane)] = n2.get((first, lane), 0.0) + 1.0
+        if not third:
+            continue
+        rest3 = rest - probs.get(second, 0.0)
+        if rest3 <= 1e-6:
+            continue
+        for lane in probs:
+            if lane in (first, second):
+                continue
+            d3[(second, lane)] = d3.get((second, lane), 0.0) + probs[lane] / rest3
+            if lane == order[2]:
+                n3[(second, lane)] = n3.get((second, lane), 0.0) + 1.0
+
+    def ratios(num, den):
+        return {k: (num.get(k, 0.0) + prior) / (v + prior)
+                for k, v in den.items() if v > 0}
+
+    return ratios(n2, d2), ratios(n3, d3)
+
+
+def _finish_order(row):
+    """上位3艇を着順に並べる。揃っていなければ None。"""
+    finish = {int(k): int(v) for k, v in (row.get("finish") or {}).items()}
+    top = sorted([(pos, lane) for lane, pos in finish.items() if 1 <= pos <= 3])
+    return [lane for _, lane in top] if len(top) == 3 else None
+
+
+def rolling_check_order_correlation(rows):
+    """
+    着順相関の補正を、分割位置を変えて確認する。
+
+    2026-09-11 の実測（2,436レース）。分割6通りすべてで改善し、学習データが
+    増えるほど効果が大きい。標準誤差の6〜10倍あり、これまで試した候補の中で
+    唯一はっきり効いた。
+
+      分割日      2着の補正            2着+3着
+      20260828   -0.0442 ± 0.0058    -0.0950 ± 0.0096
+      20260901   -0.0461 ± 0.0085    -0.1127 ± 0.0141
+      20260905   -0.0577 ± 0.0108    -0.1252 ± 0.0188
+      20260907   -0.0590 ± 0.0149    -0.1284 ± 0.0248
+
+    市場の三連単との差0.33のうち、およそ4割を埋める。
+    """
+    from scraper.scoring import estimate_win_prob, trifecta_probs
+
+    def predict(row, r2, r3):
+        probs = estimate_win_prob(row["racers"], row.get("venue"),
+                                  row.get("conditions"))
+        if not probs:
+            return None
+        out = {}
+        for combo, p in trifecta_probs(probs).items():
+            a, b, c = (int(x) for x in combo.split("-"))
+            out[combo] = p * r2.get((a, b), 1.0) * r3.get((b, c), 1.0)
+        total = sum(out.values())
+        return {k: v / total for k, v in out.items()} if total > 0 else None
+
+    usable = [r for r in rows if r.get("finish")]
+    dates = sorted({r["date"] for r in usable})
+    print("--- 着順相関の補正: 分割位置を変えた再確認 ---")
+    print(f"  {'分割日':<10} {'学習':>6} {'検証':>6} {'差':>10} {'±SE':>8} {'判定':>10}")
+    for cut in range(3, len(dates), 2):
+        train = [r for r in usable if r["date"] < dates[cut]]
+        test = [r for r in usable if r["date"] >= dates[cut]]
+        if len(train) < 300 or len(test) < 300:
+            continue
+        r2, r3 = order_correlation(train)
+        diffs = []
+        for row in test:
+            order = _finish_order(row)
+            base = predict(row, {}, {})
+            fixed = predict(row, r2, r3)
+            if not order or not base or not fixed:
+                continue
+            combo = "-".join(str(l) for l in order)
+            diffs.append(-math.log(max(fixed.get(combo, 1e-9), 1e-9))
+                         + math.log(max(base.get(combo, 1e-9), 1e-9)))
+        n = len(diffs)
+        if n < 2:
+            continue
+        mean = sum(diffs) / n
+        se = (sum((x - mean) ** 2 for x in diffs) / (n * (n - 1))) ** 0.5
+        print(f"  {dates[cut]:<10} {len(train):>6} {len(test):>6} "
+              f"{mean:>+10.4f} {se:>8.4f} {_verdict(mean, se):>10}")
+    print()
+
+
 def _verdict(diff, se):
     if se == 0:
         return "-"
