@@ -529,6 +529,12 @@ def _sync_to_db(date_str: str) -> str:
     return "取り込み完了"
 
 
+# 通信エラーが何パス連続したら「一過性ではない」と見なすか。
+# 公式サイトの読み取りタイムアウトは散発的に起きるが、連続するときは
+# サイト側か回線が本当に落ちている。巡回間隔15分なので3連続は約45分。
+LOOP_OUTAGE_STREAK = 3
+
+
 def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
                  window_min: int = 30, date_str: str = None):
     """
@@ -585,7 +591,10 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
           f"({interval_min}分ごと・締切{window_min}分以内が対象)")
 
     passes = 0
-    failures = []
+    data_problems = []      # 取り方の問題。1件でも失敗にする
+    pass_errors = []        # パスごと落ちた通信エラー。連続したときだけ失敗にする
+    consecutive = 0
+    worst_streak = 0
     while datetime.now() < end:
         passes += 1
         print()
@@ -597,13 +606,16 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
             # ない。2周目以降で手遅れが出たら、それは順番か間隔の問題である。
             problems = prerace(window_min, date_str, strict=False,
                                report_late=passes > 1)
-            failures.extend(f"pass {passes}: {x}" for x in problems)
+            data_problems.extend(f"pass {passes}: {x}" for x in problems)
             if problems:
                 print("  ※ 欠損があるが、収集は続行する")
             print(f"  {_sync_to_db(date_str)}")
+            consecutive = 0
         except Exception as e:
             print(f"[警告] pass {passes} が失敗した: {e}")
-            failures.append(f"pass {passes} が例外で失敗: {e}")
+            pass_errors.append(f"pass {passes} が例外で失敗: {e}")
+            consecutive += 1
+            worst_streak = max(worst_streak, consecutive)
 
         remaining = (end - datetime.now()).total_seconds()
         if remaining <= 0:
@@ -611,16 +623,55 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
         time.sleep(min(interval_min * 60, remaining))
 
     print()
-    print(f"ループ終了: {passes}パス実行 / 問題 {len(failures)}件")
-    if failures:
+    succeeded = passes - len(pass_errors)
+    print(f"ループ終了: {passes}パス実行（成功 {succeeded}） /"
+          f" 取り方の問題 {len(data_problems)}件 /"
+          f" 通信エラー {len(pass_errors)}件（最長連続 {worst_streak}）")
+
+    _report(data_problems, "取り方の問題")
+    _report(pass_errors, "通信エラー")
+
+    # **一過性の通信断と、本当の劣化を分けて判定する。**
+    #
+    # 以前は問題が1件でもあれば失敗にしていた。公式サイトへの読み取りが
+    # 15秒でタイムアウトするのは日常的に起きるので、20パス中2〜4パスが
+    # 落ちただけの実行まで失敗として通知していた（2026-09-09 の失敗2件は
+    # どちらもこれ）。通知が日常化すると、本当の欠測が埋もれる。
+    #
+    # 一方で「通知が来なければ正常」という運用前提は捨てられないので、
+    # 落とす条件は次の3つに限定する。取りこぼしの疑いが残る側に倒してある。
+    reasons = []
+    if data_problems:
+        # 締切後の取得や欠損は、取り方の問題であって相手側の都合ではない。
+        # 1件でも出たら直す対象なので、従来どおり必ず失敗にする。
+        reasons.append(f"取り方の問題が {len(data_problems)}件")
+    if passes and succeeded == 0:
+        reasons.append(f"{passes}パスすべてが失敗（1件も取れていない）")
+    if worst_streak >= LOOP_OUTAGE_STREAK:
+        reasons.append(f"通信エラーが{worst_streak}パス連続"
+                       f"（{LOOP_OUTAGE_STREAK}以上は一過性ではない）")
+
+    if reasons:
         # 通知は失敗時にしか飛ばないので、ここで落とさないと劣化に気づけない。
         # データは各パスで取り込み済みなので、落としても失われない。
-        print("[異常] ループ中に次の問題が出た:")
-        for f in failures[:20]:
-            print(f"  - {f}")
-        if len(failures) > 20:
-            print(f"  ... 他{len(failures) - 20}件")
+        print("[異常] " + " / ".join(reasons))
         sys.exit(1)
+
+    if pass_errors:
+        print(f"[警告] 通信エラー {len(pass_errors)}件は一過性とみなした"
+              f"（連続 {worst_streak} < {LOOP_OUTAGE_STREAK}、"
+              f"成功 {succeeded}パス）。失敗にはしない。")
+
+
+def _report(items: list, label: str) -> None:
+    """問題の一覧を出す。件数が多いときは頭だけ。"""
+    if not items:
+        return
+    print(f"  [{label}] {len(items)}件:")
+    for x in items[:20]:
+        print(f"    - {x}")
+    if len(items) > 20:
+        print(f"    ... 他{len(items) - 20}件")
 
 
 def _target_result_date() -> str:
@@ -663,8 +714,16 @@ RESULT_WAIT_MIN = 6  # 締切から結果が出るまでの目安。レースは
 
 
 def _store_result(slot: dict, date_str: str, venue_code: str, rno: int) -> bool:
-    """結果ページを取り、行に入れる。取れなければ False。"""
+    """結果ページを取り、行に入れる。取れなければ False。
+
+    **中止は「取れなかった」ではない。** 中止のレースには着順が永遠に入らない
+    ので、取り直しの対象から外し、行に印を残す。印が無いと、収集の失敗と
+    見分けがつかないまま欠測として数え続けることになる。
+    """
     result = get_result(date_str, venue_code, rno)
+    if result and result.get("cancelled"):
+        slot["cancelled"] = True
+        return False
     if not result or not result.get("winner_lane"):
         return False
     slot["result"] = {
@@ -728,18 +787,25 @@ def results(date_str: str = None):
             if slot.get("result"):
                 already += 1
                 continue
+            if slot.get("cancelled"):
+                continue
             if _store_result(slot, date_str, venue["code"], rno):
                 count += 1
         _save(data)
         print(f"  {venue['name']} 完了 (累計{count}レース)")
 
-    print(f"結果取得完了: {count}レース（取得済みで飛ばした {already}レース）")
+    cancelled = sum(1 for v in data["venues"] for r in v.get("races", [])
+                    if r.get("cancelled"))
+    print(f"結果取得完了: {count}レース"
+          f"（取得済みで飛ばした {already}レース / 中止 {cancelled}レース）")
 
     # **0件でも、既に持っている行があるなら正常。** prerace のパスが
     # レース直後に取り込んでいるので、このジョブが何もすることが無いのは
     # 望ましい状態である。一方、新規も既存も0なら、その日の結果が1つも
     # 無いということなので異常。通知は失敗時にしか飛ばない。
-    if count == 0 and already == 0:
+    # 中止も「結果が確定した」うちに数える。中止しかない日を異常として
+    # 落とすと、通知が本当の欠測と区別できなくなる。
+    if count == 0 and already == 0 and cancelled == 0:
         print(f"[異常] {date_str}: 結果が1レースも無い。"
               " 結果ページの体裁が変わったか、収集が丸ごと失敗している。")
         sys.exit(1)

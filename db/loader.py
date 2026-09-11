@@ -158,8 +158,8 @@ def _upsert_race(cur, race_date, venue_code, race) -> int:
         """
         insert into races (race_date, venue_code, race_no, closes_at, weather,
                            temperature, water_temp, wind_speed, wind_dir_code,
-                           wave_height)
-        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                           wave_height, cancelled)
+        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (race_date, venue_code, race_no) do update set
           closes_at     = coalesce(excluded.closes_at,     races.closes_at),
           weather       = coalesce(excluded.weather,       races.weather),
@@ -168,12 +168,16 @@ def _upsert_race(cur, race_date, venue_code, race) -> int:
           wind_speed    = coalesce(excluded.wind_speed,    races.wind_speed),
           wind_dir_code = coalesce(excluded.wind_dir_code, races.wind_dir_code),
           wave_height   = coalesce(excluded.wave_height,   races.wave_height),
+          -- 一度立った中止の印は下ろさない。中止の判定は結果ページでしか
+          -- できず、出走表だけを入れ直す経路がこの印を消してしまうため。
+          cancelled     = races.cancelled or excluded.cancelled,
           fetched_at    = now()
         returning id
         """,
         (race_date, venue_code, race["race_no"], race.get("closes_at"),
          cond.get("weather"), cond.get("temperature"), cond.get("water_temp"),
-         cond.get("wind_speed"), cond.get("wind_dir_code"), cond.get("wave_height")),
+         cond.get("wind_speed"), cond.get("wind_dir_code"), cond.get("wave_height"),
+         bool(race.get("cancelled"))),
     )
     return cur.fetchone()[0]
 

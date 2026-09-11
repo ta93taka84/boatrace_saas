@@ -29,7 +29,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def soup_of(name: str) -> BeautifulSoup:
-    return BeautifulSoup((FIXTURES / name).read_bytes(), "lxml")
+    return BeautifulSoup(read(name), "lxml")
+
+
+def read(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
 
 
 class TestRacelist(unittest.TestCase):
@@ -196,6 +200,41 @@ class TestResult(unittest.TestCase):
         k = result._parse_kimarite(self.soup)
         if k:
             self.assertNotIn("決まり手", k, "ラベルが除去されていない")
+
+    def test_normal_page_is_not_cancelled(self):
+        parsed = result.parse_result(read("raceresult.html"), 1)
+        self.assertIsNotNone(parsed)
+        self.assertFalse(parsed["cancelled"], "通常の結果ページを中止と誤判定している")
+
+
+class TestCancelledResult(unittest.TestCase):
+    """
+    中止・不成立を「取れなかった」と区別することを固定する。
+
+    フィクスチャは 2026-09-09 の江戸川 1R。この日は全12レースが
+    中止（順延）になり、DBに着順の無いレースが12件残った。当時は
+    中止も取得失敗も同じ None だったため、これが欠測なのか中止なのかを
+    後から判定できなかった。中止は取り直しても永遠に埋まらない。
+    """
+
+    def setUp(self):
+        self.html = read("raceresult_cancelled.html")
+
+    def test_detected_as_cancelled(self):
+        parsed = result.parse_result(self.html, 1)
+        self.assertIsNotNone(parsed, "中止が None に落ちている（取得失敗と区別できない）")
+        self.assertTrue(parsed["cancelled"])
+
+    def test_has_no_finish(self):
+        parsed = result.parse_result(self.html, 1)
+        self.assertEqual(parsed["finish"], {})
+        self.assertIsNone(parsed["winner_lane"])
+
+    def test_keys_callers_index_directly_exist(self):
+        # backtest._build_row 等に result["winner_lane"] と添字で読む経路がある。
+        parsed = result.parse_result(self.html, 1)
+        for key in ("race_no", "finish", "winner_lane", "kimarite", "start", "payouts"):
+            self.assertIn(key, parsed, f"{key} が無いと呼び出し側が KeyError になる")
 
 
 class TestScoring(unittest.TestCase):

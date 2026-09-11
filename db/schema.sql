@@ -51,6 +51,12 @@ create table if not exists races (
 
 create index if not exists races_date_idx on races (race_date desc);
 
+-- 既に作ってあるDBへの追加（create table if not exists は列を増やさない）。
+-- 中止・不成立。着順が永遠に入らないレースを、収集の失敗と区別するための印。
+-- 2026-09-09 の江戸川が全12レース中止（順延）になり、着順の無いレースが12件
+-- 残ったが、中止か欠測かをDBから判定できなかった。
+alter table races add column if not exists cancelled boolean not null default false;
+
 -- ------------------------------------------------------------------ 出走選手
 
 create table if not exists race_entries (

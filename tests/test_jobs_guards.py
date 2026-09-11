@@ -14,6 +14,7 @@
 """
 import sys
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -479,3 +480,112 @@ class TomorrowDateIsLateFireSafe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CancelledRaceIsNotMissing(unittest.TestCase):
+    """
+    中止のレースを「欠測」と数えないこと。
+
+    2026-09-09 の江戸川が全12レース中止（順延）になり、着順の無い
+    レースが12件残った。中止は取り直しても永遠に埋まらないので、
+    印を残して取り直しの対象から外す。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, slot, result):
+        venue = {"code": "05", "name": "多摩川"}
+        data = {"venues": [{"code": "05", "name": "多摩川", "races": [slot]}]}
+        called = []
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_result",
+                               side_effect=lambda *a: called.append(a) or result),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+            jobs.results("20260910")
+        return data["venues"][0]["races"][0], called
+
+    def test_cancelled_day_does_not_exit(self):
+        """中止しか無い日を異常として落とさない。通知が本当の欠測と混ざる。"""
+        cancelled = {"race_no": 1, "cancelled": True, "winner_lane": None,
+                     "finish": {}, "kimarite": None, "start": [], "payouts": {}}
+        slot, _ = self._run({"race_no": 1}, cancelled)
+        self.assertTrue(slot["cancelled"], "行に中止の印が残っていない")
+
+    def test_cancelled_race_is_not_refetched(self):
+        """一度中止と分かったレースを毎回取りに行かない。"""
+        _, called = self._run({"race_no": 1, "cancelled": True}, None)
+        # 同じ日の他のレースは取りに行くので、印のある 1R だけを見る。
+        fetched = [a[2] for a in called]
+        self.assertNotIn(1, fetched, "中止済みのレースを再度取得している")
+
+    def test_真の欠測はこれまでどおり落ちる(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._run({"race_no": 1}, None)
+        self.assertEqual(cm.exception.code, 1)
+
+
+class LoopFailureClassification(unittest.TestCase):
+    """
+    一過性の通信断と、本当の劣化を分けること。
+
+    以前は問題が1件でもあれば失敗にしていたので、20パス中2～4パスが
+    タイムアウトしただけの実行まで通知していた。通知が日常化すると
+    本当の欠測が埋もれる。一方で「通知が来なければ正常」の前提は捨てられない。
+    """
+
+    def _run(self, outcomes, window=30, interval=15):
+        """outcomes: パスごとの結果。例外なら Exception、それ以外は problems のリスト。"""
+        seq = list(outcomes)
+
+        def fake_prerace(*a, **kw):
+            if not seq:
+                raise AssertionError("想定より多く周回している")
+            out = seq.pop(0)
+            if isinstance(out, Exception):
+                raise out
+            return out
+
+        # ループの終了を outcomes の消費で決める。時刻に依存させない。
+        real_now = jobs.datetime.now()
+        times = iter([real_now + timedelta(seconds=i) for i in range(len(seq) * 4 + 8)])
+
+        with mock.patch.object(jobs, "prerace", side_effect=fake_prerace),              mock.patch.object(jobs, "_sync_to_db", return_value="取り込み済み"),              mock.patch.object(jobs, "_close_schedule", return_value=[]),              mock.patch.object(jobs.time, "sleep"),              mock.patch.object(jobs, "_today", return_value="20260910"):
+            end_after = len(outcomes)
+            calls = {"n": 0}
+
+            class FakeDatetime(jobs.datetime):
+                @classmethod
+                def now(cls):
+                    calls["n"] += 1
+                    # 指定回数だけ回したら終了時刻を超えさせる
+                    if len(seq) == 0 and calls["n"] > 4:
+                        return real_now + timedelta(hours=24)
+                    return real_now
+
+            with mock.patch.object(jobs, "datetime", FakeDatetime):
+                jobs.prerace_loop(until_hhmm="23:59", interval_min=interval,
+                                  window_min=window, date_str="20260910")
+
+    def test_isolated_timeouts_do_not_fail(self):
+        """散発的なタイムアウトは失敗にしない（2026-09-09 の失敗はこれ）。"""
+        self._run([[], TimeoutError("read timed out"), [],
+                   TimeoutError("read timed out"), [], []])
+
+    def test_sustained_outage_fails(self):
+        """連続する通信エラーは一過性ではない。"""
+        with self.assertRaises(SystemExit) as cm:
+            self._run([[], TimeoutError("x"), TimeoutError("x"),
+                       TimeoutError("x"), []])
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_total_loss_fails(self):
+        """1パスも成功しなかった実行は失敗。"""
+        with self.assertRaises(SystemExit) as cm:
+            self._run([TimeoutError("x")])
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_data_problem_still_fails(self):
+        """締切後取得や欠損は1件でも失敗。相手側の都合ではなく取り方の問題。"""
+        with self.assertRaises(SystemExit) as cm:
+            self._run([[], ["江戸川 3R: 締切後に取得"], []])
+        self.assertEqual(cm.exception.code, 1)

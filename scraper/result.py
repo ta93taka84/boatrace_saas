@@ -15,7 +15,8 @@ def get_result(date_str: str, venue_code: str, race_no: int) -> dict | None:
       "start": [{"course": 1, "lane": 1, "st": 0.17, "flying": False}, ...],
       "payouts": {"3連単": {"combo": "1-6-2", "payout": 9480, "popularity": 29}, ...},
     }
-    中止・不成立などで着順が取れない場合は None。
+    中止・不成立のときは cancelled=True の行を返す（着順は空）。
+    それ以外の理由で着順が取れない場合は None。
     """
     params = {"rno": race_no, "jcd": venue_code, "hd": date_str}
     return parse_result(fetch("/owpc/pc/race/raceresult", params=params), race_no)
@@ -26,19 +27,55 @@ def result_params(date_str: str, venue_code: str, race_no: int) -> dict:
     return {"rno": race_no, "jcd": venue_code, "hd": date_str}
 
 
+# 中止・不成立のときにページの見出しへ出る文言。**この見出しは通常の結果
+# ページには存在しない**（2026-09-10 の開催ぶんで確認した）ので、
+# 「着順が取れない」理由の切り分けに使える。
+CANCELLED_TITLES = ("レース中止", "レース不成立")
+
+
+def _is_cancelled(soup) -> bool:
+    """中止・不成立か。見出しの文言で判定する。"""
+    for h in soup.select("h3.title12_title"):
+        text = h.get_text(strip=True)
+        if any(t in text for t in CANCELLED_TITLES):
+            return True
+    return False
+
+
 def parse_result(html: bytes, race_no: int) -> dict | None:
     """取得済みのHTMLから結果を組み立てる。取得と分けてあるのは、
-    収集済みの行にキャッシュから項目を足すときサイトを叩かないため。"""
+    収集済みの行にキャッシュから項目を足すときサイトを叩かないため。
+
+    **「中止」と「取れなかった」を同じ None にしないこと。** 以前は両方 None
+    だったため、中止になった開催が「結果の欠測」と区別できなかった。実際に
+    2026-09-09 の江戸川が全12レース中止（順延）になり、DBに着順の無いレースが
+    12件残ったが、これが中止によるものか収集の失敗かを後から判定できなかった。
+    中止は正常な結果であり、取り直しても永遠に埋まらない。
+    """
     soup = BeautifulSoup(html, "lxml")
 
     finish = _parse_finish(soup)
     if not finish:
+        if _is_cancelled(soup):
+            # winner_lane と finish のキーは必ず持たせる。呼び出し側に
+            # result["winner_lane"] と添字で読む経路があり、キーを欠くと
+            # KeyError になる（backtest._build_row）。
+            return {
+                "race_no": race_no,
+                "cancelled": True,
+                "finish": {},
+                "winner_lane": None,
+                "kimarite": None,
+                "start": [],
+                "payouts": {},
+            }
         return None
 
     winner_lane = next((lane for lane, rank in finish.items() if rank == 1), None)
 
     return {
         "race_no": race_no,
+        "cancelled": False,
         "finish": finish,
         "winner_lane": winner_lane,
         "kimarite": _parse_kimarite(soup),
