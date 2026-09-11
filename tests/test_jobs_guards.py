@@ -449,5 +449,33 @@ class ResultsJobEmptyDay(unittest.TestCase):
         self.assertEqual(cm.exception.code, 1)
 
 
+class TomorrowDateIsLateFireSafe(unittest.TestCase):
+    """
+    翌日ジョブの対象日が、起動の遅れで日付を跨いでも正しいこと。
+
+    **GitHubのcronは1〜4時間ずれる。** 実際に2026-09-10 の22:30起動が翌02:06に
+    ずれ、「今日＋1日」で計算したせいで翌々日を対象にし、出走表が未公開で
+    開催場0場となって異常終了した。results が同じ理由で対象日を判定しているのに、
+    こちらに同じ配慮を入れていなかった。
+    """
+
+    def test_evening_targets_tomorrow(self):
+        from datetime import datetime
+
+        got = jobs._tomorrow_date(datetime(2026, 9, 10, 22, 30))
+        self.assertEqual(got, "20260911")
+
+    def test_after_midnight_targets_today(self):
+        """前夜の実行が遅れて日付を跨いだ形。対象は繰り上がらない。"""
+        from datetime import datetime
+
+        got = jobs._tomorrow_date(datetime(2026, 9, 11, 2, 6))
+        self.assertEqual(got, "20260911")
+
+    def test_job_date_matches_the_job(self):
+        """ワークフローが使う日付と、ジョブ自身が使う日付が一致すること。"""
+        self.assertEqual(jobs._job_date("tomorrow"), jobs._tomorrow_date())
+
+
 if __name__ == "__main__":
     unittest.main()

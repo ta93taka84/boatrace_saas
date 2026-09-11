@@ -77,8 +77,23 @@ def _path(date_str: str) -> Path:
     return OUTPUT_DIR / f"{date_str}.json"
 
 
-def _tomorrow_date() -> str:
-    return (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+def _tomorrow_date(now: datetime = None) -> str:
+    """
+    翌日ジョブが対象とすべき開催日。**起動が日付を跨いでも正しく動くこと。**
+
+    このジョブは22:30起動の想定だが、GitHubのcronは1〜4時間ずれる。実際に
+    2026-09-10 の22:30起動が翌02:06にずれ、単純に「今日＋1日」で計算したために
+    翌々日を対象にした。その日の出走表はまだ公開されておらず、開催場0場で
+    異常終了した（results が同じ理由で _target_result_date を持っているのに、
+    こちらに同じ配慮を入れていなかった）。
+
+    開催時間帯の前（9時より前）に動いているなら、それは前夜の実行が遅れたもの
+    なので対象は「今日」。それ以外は「翌日」。
+    """
+    now = now or datetime.now()
+    if now.hour < 9:
+        return now.strftime("%Y%m%d")
+    return (now + timedelta(days=1)).strftime("%Y%m%d")
 
 
 def _load(date_str: str) -> dict:
@@ -635,7 +650,13 @@ def _job_date(cmd: str) -> str:
     取り込みは存在しない当日のファイルを見に行き、
     「取り込むデータなし」と表示して正常終了していた。
     """
-    return _target_result_date() if cmd == "results" else _today()
+    if cmd == "results":
+        return _target_result_date()
+    if cmd == "tomorrow":
+        # 収集側と同じ日付を返す。ここがずれると、収集は翌日のファイルを書くのに
+        # 取り込みは別の日を見に行き、「取り込むデータなし」で正常終了する。
+        return _tomorrow_date()
+    return _today()
 
 
 RESULT_WAIT_MIN = 6  # 締切から結果が出るまでの目安。レースは締切の数分後に発走する
