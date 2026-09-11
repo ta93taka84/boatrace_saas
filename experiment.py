@@ -6,12 +6,14 @@
 これをやらないと、ノイズへの過剰適合を改善と誤認する。
 
 使い方:
-  py -3 experiment.py
+  py -3 experiment.py             # 候補の採否を検証側で判断する
+  py -3 experiment.py fit-order   # 配備用の着順相関の補正表を全データで取り直す
 """
 import io
 import json
 import math
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from scraper.scoring import BLEND_WEIGHT
@@ -693,6 +695,7 @@ def main():
     rolling_check_exhibition(rows)
     _machine_coverage(rows)
     blend_check(rows)
+    rolling_check_order_correlation(rows)
     trifecta_blend_check(rows)
     _noise_note(len(test))
 
@@ -820,6 +823,24 @@ def trifecta_blend_check(rows, steps=21):
     from scraper.session import cached
     from scraper.scoring import estimate_win_prob, trifecta_probs
 
+    # 着順相関の補正を入れた展開で測る。配備されるのがそちらだからである。
+    # 補正表は、それを当てる行より前の日付だけから作る。入れ子にしているのは、
+    # w を選ぶ学習側でも補正が in-sample にならないようにするため。
+    # 先頭1/4は「その行より前」が足りないので採点に使わない。
+    usable = [r for r in rows if r.get("finish")]
+    all_dates = sorted({r["date"] for r in usable})
+    if len(all_dates) < 4:
+        return
+    cut_date = all_dates[len(all_dates) // 2]
+    mid_date = all_dates[len(all_dates) // 4]
+    corr_test = order_correlation([r for r in usable if r["date"] < cut_date])
+    corr_train = order_correlation([r for r in usable if r["date"] < mid_date])
+
+    def corr_for(date):
+        if date >= cut_date:
+            return corr_test
+        return corr_train if date >= mid_date else None
+
     data = []
     for row in rows:
         params = {"rno": row["race_no"], "jcd": row["venue"], "hd": row["date"]}
@@ -841,7 +862,10 @@ def trifecta_blend_check(rows, steps=21):
         m = estimate_win_prob(row["racers"], row.get("venue"), row.get("conditions"))
         if not m:
             continue
-        model = trifecta_probs(m)
+        corr = corr_for(row["date"])
+        if corr is None:
+            continue
+        model = trifecta_probs(m, corr)
         combo = "-".join(str(l) for l, _ in top3)
         if combo in market and combo in model:
             data.append((row["date"], market[combo], model[combo]))
@@ -850,10 +874,8 @@ def trifecta_blend_check(rows, steps=21):
         print(f"[三連単の混合] キャッシュ済みのオッズが{len(data)}件しかないため省略")
         return
 
-    dates = sorted({d for d, _, _ in data})
-    cut = dates[len(dates) // 2]
-    train = [d for d in data if d[0] < cut]
-    test = [d for d in data if d[0] >= cut]
+    train = [d for d in data if d[0] < cut_date]
+    test = [d for d in data if d[0] >= cut_date]
     if not train or not test:
         return
 
@@ -937,6 +959,52 @@ def order_correlation(rows, third=True, prior=3.0):
     return ratios(n2, d2), ratios(n3, d3)
 
 
+ORDER_PATH = Path("scraper/order_corr.json")
+
+
+def fit_order():
+    """
+    配備用の着順相関の補正表を全データから取り直し、scraper/order_corr.json に書く。
+
+    **これは配備用であって、優劣の判断に使ってはならない。** 採否は
+    rolling_check_order_correlation の分割で済ませてある（分割6通りすべてで改善、
+    標準誤差の6〜10倍）。判断が済んだものを配備するときだけ全データで取り直す、
+    というのが course_rates.json と同じ手順である。
+
+    ここで書いたファイルは scoring.trifecta_probs が黙って読む。したがって
+    **この後に experiment.py の検証を回すときは、補正表を明示的に渡すこと。**
+    全データの着順から作った表で検証側を採点すると、答えを見て答え合わせをする
+    ことになる。実際の呼び出し側はどちらもそうしてある。
+    """
+    rows = load()
+    usable = [r for r in rows if r.get("finish")]
+    if len(usable) < 300:
+        print(f"着順の揃った行が{len(usable)}件しかありません。"
+              "backtest.py collect で増やしてください。")
+        return
+
+    r2, r3 = order_correlation(usable)
+
+    def dump(table):
+        return {f"{a}-{b}": round(v, 4) for (a, b), v in sorted(table.items())}
+
+    out = {
+        "generated_at": datetime.now().isoformat(),
+        "races": len(usable),
+        "prior": 3.0,
+        "second": dump(r2),
+        "third": dump(r3),
+    }
+    ORDER_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+    print(f"{len(usable)}レースから着順相関を推定し {ORDER_PATH} に書き出しました。")
+
+    extreme = sorted(r2.items(), key=lambda kv: -abs(math.log(kv[1])))[:5]
+    print("  偏りの大きい2着の組み合わせ（1着⇒2着: 独立な展開の何倍か）")
+    for (a, b), v in extreme:
+        print(f"    {a}⇒{b}  {v:.2f}倍")
+
+
 def _finish_order(row):
     """上位3艇を着順に並べる。揃っていなければ None。"""
     finish = {int(k): int(v) for k, v in (row.get("finish") or {}).items()}
@@ -962,17 +1030,13 @@ def rolling_check_order_correlation(rows):
     """
     from scraper.scoring import estimate_win_prob, trifecta_probs
 
-    def predict(row, r2, r3):
+    def predict(row, corr):
+        """配備側と同じ trifecta_probs を通す。表は必ず学習側から作って渡す。"""
         probs = estimate_win_prob(row["racers"], row.get("venue"),
                                   row.get("conditions"))
         if not probs:
             return None
-        out = {}
-        for combo, p in trifecta_probs(probs).items():
-            a, b, c = (int(x) for x in combo.split("-"))
-            out[combo] = p * r2.get((a, b), 1.0) * r3.get((b, c), 1.0)
-        total = sum(out.values())
-        return {k: v / total for k, v in out.items()} if total > 0 else None
+        return trifecta_probs(probs, corr) or None
 
     usable = [r for r in rows if r.get("finish")]
     dates = sorted({r["date"] for r in usable})
@@ -983,12 +1047,12 @@ def rolling_check_order_correlation(rows):
         test = [r for r in usable if r["date"] >= dates[cut]]
         if len(train) < 300 or len(test) < 300:
             continue
-        r2, r3 = order_correlation(train)
+        corr = order_correlation(train)
         diffs = []
         for row in test:
             order = _finish_order(row)
-            base = predict(row, {}, {})
-            fixed = predict(row, r2, r3)
+            base = predict(row, ({}, {}))
+            fixed = predict(row, corr)
             if not order or not base or not fixed:
                 continue
             combo = "-".join(str(l) for l in order)
@@ -1112,4 +1176,7 @@ def _noise_note(n: int):
 
 if __name__ == "__main__":
     _use_utf8_stdio()
-    main()
+    if sys.argv[1:2] == ["fit-order"]:
+        fit_order()
+    else:
+        main()

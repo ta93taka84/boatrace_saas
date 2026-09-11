@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scraper.scoring import (BLEND_WEIGHT, blend_with_market,
+from scraper.scoring import (BLEND_WEIGHT, blend_with_market, order_corr,
                              recommend_trifecta, score_race, trifecta_probs)
 
 PROB = {1: 0.45, 2: 0.18, 3: 0.14, 4: 0.12, 5: 0.07, 6: 0.04}
@@ -44,6 +44,94 @@ class TrifectaProbsTest(unittest.TestCase):
         for lane, p in PROB.items():
             total = sum(v for k, v in probs.items() if k.startswith(f"{lane}-"))
             self.assertAlmostEqual(total, p, places=9)
+
+
+class OrderCorrelationTest(unittest.TestCase):
+    """
+    着順相関の補正。**ここが壊れても画面は普通に見える。**
+
+    補正表は「実測回数 ÷ 独立な展開が与える期待回数」で、1.0なら偏り無し。
+    表が読めなくなれば黙って補正なしに戻り、正規化を落とせば確率の合計が
+    1でなくなる。どちらも値域はもっともらしいままなので、ここで固定する。
+    """
+
+    NONE = ({}, {})
+
+    def test_empty_table_is_the_plain_expansion(self):
+        """表が空なら素の Plackett-Luce に戻る。壊れずに素通りすること。"""
+        probs = trifecta_probs(PROB, self.NONE)
+        self.assertEqual(len(probs), 120)
+        self.assertAlmostEqual(sum(probs.values()), 1.0, places=9)
+        # P(1⇒2⇒3) = 0.45 × 0.18/0.55 × 0.14/0.37
+        self.assertAlmostEqual(probs["1-2-3"],
+                               0.45 * (0.18 / 0.55) * (0.14 / 0.37), places=9)
+
+    def test_correction_shifts_second_place(self):
+        """補正を掛けた組み合わせが、掛けていない組み合わせより厚くなる。"""
+        plain = trifecta_probs(PROB, self.NONE)
+        fixed = trifecta_probs(PROB, ({(1, 2): 2.0}, {}))
+        self.assertGreater(fixed["1-2-3"] / plain["1-2-3"],
+                           fixed["1-3-2"] / plain["1-3-2"])
+
+    def test_missing_pairs_are_treated_as_no_bias(self):
+        """表に無い組み合わせは1.0。全部欠けていれば素の展開と一致する。"""
+        plain = trifecta_probs(PROB, self.NONE)
+        partial = trifecta_probs(PROB, ({(1, 2): 1.0}, {(2, 3): 1.0}))
+        for combo, p in plain.items():
+            self.assertAlmostEqual(partial[combo], p, places=9)
+
+    def test_normalization_survives_a_lopsided_table(self):
+        """偏った表でも合計は1のまま。"""
+        r2 = {(a, b): 5.0 for a in range(1, 7) for b in range(1, 7) if a != b and b > 3}
+        probs = trifecta_probs(PROB, (r2, {}))
+        self.assertEqual(len(probs), 120)
+        self.assertAlmostEqual(sum(probs.values()), 1.0, places=9)
+
+    def test_first_place_probability_survives_correction(self):
+        """
+        **補正は2着以降の形だけを変える。1着の確率は動かしてはいけない。**
+        画面には勝率と三連単の両方を出しているので、ここがずれると
+        同じレースについて食い違う数字を並べることになる。
+        """
+        r2 = {(a, b): 3.0 for a in range(1, 7) for b in range(1, 7) if a != b and b > 3}
+        probs = trifecta_probs(PROB, (r2, {(2, 3): 4.0}))
+        for lane, p in PROB.items():
+            total = sum(v for k, v in probs.items() if k.startswith(f"{lane}-"))
+            self.assertAlmostEqual(total, p, places=9)
+
+
+class DeployedTableTest(unittest.TestCase):
+    """
+    配備されている補正表そのものを見る。
+
+    このファイルが消えると三連単は黙って補正なしに戻る。検証で
+    標準誤差の6〜10倍の改善が出ている部分なので、消失を失敗として拾う。
+    作り直しは `py -3 experiment.py fit-order`。
+    """
+
+    def test_table_is_present_and_well_formed(self):
+        second, third = order_corr()
+        self.assertTrue(second, "scraper/order_corr.json が無い（fit-order で作る）")
+        self.assertTrue(third)
+        for table in (second, third):
+            for key, value in table.items():
+                self.assertEqual(len(key), 2)
+                self.assertTrue(all(1 <= lane <= 6 for lane in key), key)
+                self.assertGreater(value, 0.0, key)
+                self.assertLess(value, 10.0, key)
+
+    def test_deployed_table_is_used_by_default(self):
+        """corr を渡さなければ配備の表が効く。素の展開に戻っていないこと。"""
+        self.assertNotEqual(trifecta_probs(PROB), trifecta_probs(PROB, ({}, {})))
+
+    def test_outer_boats_follow_each_other(self):
+        """
+        補正の向きを固定する。4号艇が1着のとき、2着は6号艇が来やすく
+        1号艇は沈む。符号が反転していたら、表の作り方か読み方が壊れている。
+        """
+        second, _ = order_corr()
+        self.assertGreater(second[(4, 6)], 1.5)
+        self.assertLess(second[(4, 1)], 1.0)
 
 
 class RecommendTest(unittest.TestCase):

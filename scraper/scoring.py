@@ -32,20 +32,25 @@ THEORETICAL_RETURN = 1.0 - TAKEOUT_RATE
 # 採点すると、モデル単独は市場に +0.3833 ± 0.0428 で負けている。
 #
 # 重みごとの検証成績。表示しているのは三連単なので、そちらで決めた。
-# 日付で学習と検証に分け、検証1,211レースを採点している（全2,304レース、
-# 2026-08-25〜09-08）。データを1,440→2,302レースに増やしても選ばれる点は動かなかった。
+# 日付で学習と検証に分け、検証1,067レースを採点している（全2,436レース、
+# 2026-08-25〜09-10）。データを1,440→2,436レースに増やしても選ばれる点は動かなかった。
 #
-#   w     三連単LogLoss  市場との差         1着LogLoss  m/k=4 の買い目のEV
-#   0.0     3.7070       —                  1.1352      0.75
-#   0.1     3.7062       -0.0008 ± 0.0023   1.1357      0.97
-#   0.2     3.7109       +0.0039 ± 0.0043   1.1373      1.20   ← 採用
-#   0.3     3.7206       +0.0135 ± 0.0063   1.1399      1.42
-#   0.5     3.7551       +0.0481 ± 0.0103   1.1480      1.87
-#   1.0     4.0389       +0.3319 ± 0.0297   1.1892      3.00   ← 9/7まではここ
+# **2026-09-11 に測り直した。** 三連単の展開へ着順相関の補正を入れたので、
+# 以前の表（着順相関なし）とは別物になっている。同じ検証1,067レースで比べると、
+# モデル単独の市場との差は +0.3422 → +0.2104 に縮んだ。
 #
-# **0.2 は、市場と統計的に区別が付かないままモデルを最も濃く混ぜられる点。**
-# 0.3 以降は差が標準誤差の2倍を超える（この決まりは CLAUDE.md）。
-# 学習側で選ばせると 0.00、つまりデータは「混ぜるな」と言っている。それでも
+#   w     三連単LogLoss  市場との差         補正なしの差        m/k=4 の買い目のEV
+#   0.0     3.7043       —                  —                   0.75
+#   0.1     3.7041       -0.0002 ± 0.0019   -0.0003 ± 0.0023    0.97
+#   0.2     3.7076       +0.0033 ± 0.0037   +0.0048 ± 0.0045    1.20   ← 採用
+#   0.3     3.7146       +0.0103 ± 0.0055   +0.0147 ± 0.0066    1.42
+#   0.5     3.7390       +0.0347 ± 0.0091   +0.0495 ± 0.0108    1.87
+#   1.0     3.9147       +0.2104 ± 0.0241   +0.3422 ± 0.0324    3.00   ← 9/7まではここ
+#
+# **補正を入れたことで上限は 0.3 まで動いたが、0.2 に据え置いた。** 0.3 の差は
+# 標準誤差の1.9倍で境目ぎりぎりであり、学習側で選ばせると相変わらず 0.00、
+# つまりデータは「混ぜるな」と言っている。0.2 と 0.3 のどちらが良いかを示す
+# 証拠は無く、違うのは画面に出る期待値の大きさだけなので、市場に近いほうを採る。
 # 0 にしないのは、AI予想を出すという製品の決定があるため。ここは精度の主張では
 # なく、**どこまで市場から離れてよいかの上限**として置いている。
 #
@@ -65,6 +70,11 @@ COURSE_BASE_WIN_RATE = {1: 0.55, 2: 0.145, 3: 0.12, 4: 0.105, 5: 0.055, 6: 0.025
 
 _RATES_PATH = Path(__file__).with_name("course_rates.json")
 _rates_cache = None
+
+# 三連単の着順相関の補正表。experiment.py fit-order が書き出す。
+# 無ければ空の表になり、展開は補正なしの Plackett-Luce に戻るだけ。
+_ORDER_PATH = Path(__file__).with_name("order_corr.json")
+_order_cache = None
 
 
 def _load_rates() -> dict | None:
@@ -94,6 +104,31 @@ def course_rates(venue_code: str | None = None) -> dict[int, float]:
         return COURSE_BASE_WIN_RATE
 
     return {int(k): float(v) for k, v in table.items()}
+
+
+def order_corr() -> tuple[dict[tuple[int, int], float], dict[tuple[int, int], float]]:
+    """
+    着順の結びつきの補正表を (2着, 3着) で返す。ファイルが無ければ空の表。
+
+    値は「実測回数 ÷ 独立な展開が与える期待回数」で、1.0なら偏り無し。
+    作るのは experiment.py の order_correlation で、配備用に全データから
+    取り直すのが `py -3 experiment.py fit-order`。
+    """
+    global _order_cache
+    if _order_cache is None:
+        data = {}
+        if _ORDER_PATH.exists():
+            data = json.loads(_ORDER_PATH.read_text(encoding="utf-8"))
+
+        def table(key):
+            out = {}
+            for k, v in (data.get(key) or {}).items():
+                a, b = k.split("-")
+                out[(int(a), int(b))] = float(v)
+            return out
+
+        _order_cache = (table("second"), table("third"))
+    return _order_cache
 
 
 # 級別を数値化した相対強度。等級の実力差の目安。
@@ -228,22 +263,30 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
     return result
 
 
-def trifecta_probs(model_prob: dict[int, float]) -> dict[str, float]:
+def trifecta_probs(model_prob: dict[int, float],
+                   corr: tuple[dict, dict] | None = None) -> dict[str, float]:
     """
-    1着確率から三連単120通りの確率を組む。
+    1着確率から三連単120通りの確率を組み、着順の結びつきで補正する。
 
-        P(a⇒b⇒c) = p_a × p_b/(1-p_a) × p_c/(1-p_a-p_b)
+        P(a⇒b⇒c) = p_a × p_b/(1-p_a) × p_c/(1-p_a-p_b) × r2(a,b) × r3(b,c)
 
     この式が使えるのは、model_prob をレース内ソフトマックス（条件付きロジット）
     で作っているからである。各艇に強さ s_i があって P(iが1着) = s_i / Σs という形なので、
     1着を抜いた残り5艇に同じ式を当てればそのまま2着の確率になる。
     モデルを作り直さず、既に検証した強さをそのまま展開に使える。
 
-    **この展開は着順の相関を無視している。** 実際のレースでは、まくられた1号艇が
-    3着に残る、同じターンで外が並んで決まるといった結びつきがあるので、
-    この式はそういう目の確率を低く見積もる。改善するなら着順の相関を入れたモデルが要るが、
-    採否は `experiment.py` の検証側で判断すること。
+    掛け算だけの展開は着順の相関を持たない。実際には「外が勝つときは外が続き、
+    内が沈む」というまくりの道連れがあり、4号艇が1着のとき2着に6号艇が来る目は
+    独立な展開の2.92倍、逆に1号艇が来る目は0.59倍だった。その偏りを実測から作った
+    表で換算する。分割6通りすべてで改善し、効果は標準誤差の6〜10倍あった
+    （experiment.py の `rolling_check_order_correlation`）。
+
+    corr を渡さなければ配備用の表（order_corr()）を使う。**検証から呼ぶときは
+    必ず学習側だけから作った表を明示的に渡すこと。** 配備用の表は全データの
+    着順から作られているので、それを検証側の採点に使うと答えを見て答え合わせをする
+    ことになる。補正を外した素の展開が欲しいときは `({}, {})` を渡す。
     """
+    r2, r3 = corr if corr is not None else order_corr()
     lanes = sorted(model_prob)
     out = {}
     for a in lanes:
@@ -251,6 +294,7 @@ def trifecta_probs(model_prob: dict[int, float]) -> dict[str, float]:
         rest_a = 1.0 - pa
         if rest_a <= 1e-9:
             continue
+        group = {}
         for b in lanes:
             if b == a:
                 continue
@@ -261,8 +305,24 @@ def trifecta_probs(model_prob: dict[int, float]) -> dict[str, float]:
             for c in lanes:
                 if c == a or c == b:
                     continue
-                out[f"{a}-{b}-{c}"] = pa * pb * (model_prob[c] / rest_b)
-    return out
+                group[f"{a}-{b}-{c}"] = (pb * (model_prob[c] / rest_b)
+                                         * r2.get((a, b), 1.0)
+                                         * r3.get((b, c), 1.0))
+        # **正規化は1着ごとに行う。** 補正は合計を崩すので均し直しが要るが、
+        # 全体で一度に均すと1着の確率まで動いてしまい、画面に出している
+        # 勝率と三連単が食い違う。1着ごとに均せば、2着以降の形だけが変わって
+        # 1着の確率はモデルのまま残る。成績もこちらが良かった
+        # （分割6通りで符号が揃い、4通りで標準誤差の2倍を超える）。
+        total = sum(group.values())
+        if total <= 0:
+            continue
+        for combo, v in group.items():
+            out[combo] = v / total * pa
+
+    total = sum(out.values())
+    if total <= 0:
+        return {}
+    return {k: v / total for k, v in out.items()}
 
 
 def blend_with_market(model_prob: dict[int, float],
@@ -301,8 +361,8 @@ def recommend_trifecta(model_prob: dict[int, float],
     weight を1.0未満にすると、各買い目の確率を市場のオッズが示す確率へ
     引き戻す。**引き戻しは三連単の目の単位で行う。** 1着の確率だけを混ぜて
     そこから展開すると、市場のオッズが持っている着順の相関（まくられた艇が
-    3着に残る、といった結びつき）を捨ててしまう。trifecta_probs の弱点が
-    そこなので、ここは市場の120通りをそのまま使うほうが良い。
+    3着に残る、といった結びつき）を捨ててしまう。trifecta_probs は補正表で
+    その相関を持つようになったが、市場の120通りのほうがまだ精しい。
     """
     probs = trifecta_probs(model_prob)
     if weight < 1.0:
