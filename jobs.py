@@ -39,7 +39,7 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from scraper.schedule import get_active_venues, get_close_times
 from scraper.racelist import get_racelist
 from scraper.beforeinfo import get_beforeinfo, merge_into_racers
-from scraper.odds import get_odds
+from scraper.odds import get_odds, get_trio_odds
 from scraper.result import get_result
 from scraper.scoring import score_race, CALIBRATED
 
@@ -326,6 +326,8 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
 
     late = []
     leads = []
+    odds_got = 0
+    trio_got = 0
     for venue, rno, hhmm in targets:
         slot = _race_slot(data, venue, rno)
         slot["closes_at"] = hhmm
@@ -370,9 +372,25 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
             slot["market_prob"] = market_prob
             slot["overround"] = odds["overround"]
             slot["odds"] = odds["odds"]
+            odds_got += 1
+
+        # 三連複は別ページなので1リクエスト増える。**ここで例外を握るのは、
+        # 三連複が取れないことで三連単の予測まで失わせないため。** 買い目の
+        # 本体は三連単側にあり、締切前にそれを出すことのほうが優先する。
+        # 握ったまま静かに壊れ続けないよう、1パスで一度も取れなければ
+        # 下でまとめて問題に数える（組版が変わった印）。
+        try:
+            trio = get_trio_odds(date_str, venue["code"], rno)
+        except Exception as exc:               # noqa: BLE001
+            trio = None
+            print(f"  ! {venue['name']} {rno}R: 三連複オッズを取得できなかった: {exc}")
+        if trio:
+            slot["trio_odds"] = trio
+            trio_got += 1
 
         scores = score_race(slot.get("racers", []), market_prob, venue["code"],
-                            slot.get("conditions"), slot.get("odds"))
+                            slot.get("conditions"), slot.get("odds"),
+                            slot.get("trio_odds"))
         if scores:
             slot.update(scores)
             # 前日に暫定として出した行を、当日の予測で上書きしている。
@@ -403,6 +421,13 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
     else:
         print(f"直前情報取得完了: {len(targets)}レース")
     problems = _healthcheck(data, targets)
+    # 三連単が取れているのに三連複が1件も取れないのは、通信の問題ではなく
+    # odds3f の組版が変わった印。上の except が個々の失敗を握るので、
+    # ここで数えないと三連複の買い目が静かに画面から消え続ける。
+    if odds_got and not trio_got:
+        problems.append(f"三連単は{odds_got}レース取れたが三連複が1件も取れない。"
+                        "odds3f の組版が変わった可能性がある。")
+        print(f"  [異常] {problems[-1]}")
     if late:
         for line in late:
             print(f"  [劣化] {line}")

@@ -244,10 +244,11 @@ def _insert_odds(cur, race_id, race) -> bool:
 
     cur.execute(
         """
-        insert into odds_snapshots (race_id, overround, market_prob, trifecta)
-        values (%s, %s, %s, %s)
+        insert into odds_snapshots (race_id, overround, market_prob, trifecta, trio)
+        values (%s, %s, %s, %s, %s)
         """,
-        (race_id, race.get("overround"), Jsonb(market), Jsonb(race.get("odds", {}))),
+        (race_id, race.get("overround"), Jsonb(market), Jsonb(race.get("odds", {})),
+         Jsonb(race["trio_odds"]) if race.get("trio_odds") else None),
     )
     return True
 
@@ -273,15 +274,19 @@ def _upsert_prediction(cur, race_id, race):
     cur.execute(
         """
         insert into predictions (race_id, model_version, model_prob, ev,
-                                 top_lane, top_ev, picks, pub_prob,
+                                 top_lane, top_ev, picks, trio_picks, pub_prob,
                                  blend_weight, provisional, calibrated)
-        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (race_id, model_version) do update set
           model_prob = excluded.model_prob,
           ev         = excluded.ev,
           top_lane   = excluded.top_lane,
           top_ev     = excluded.top_ev,
           picks        = excluded.picks,
+          -- 三連複が取れなかったパスで既存の買い目を消さない。三連単だけが
+          -- 取れる経路があるので、excluded をそのまま入れると、直前に出した
+          -- 三連複の買い目が画面から消える。
+          trio_picks   = coalesce(excluded.trio_picks, predictions.trio_picks),
           pub_prob     = excluded.pub_prob,
           blend_weight = excluded.blend_weight,
           provisional  = excluded.provisional,
@@ -293,6 +298,7 @@ def _upsert_prediction(cur, race_id, race):
          Jsonb(_str_keys(race.get("ev", {}))),
          race.get("top_lane"), race.get("top_ev"),
          Jsonb(race["picks"]) if race.get("picks") else None,
+         Jsonb(race["trio_picks"]) if race.get("trio_picks") else None,
          Jsonb(_str_keys(race["pub_prob"])) if race.get("pub_prob") else None,
          race.get("blend_weight"),
          bool(race.get("provisional")),

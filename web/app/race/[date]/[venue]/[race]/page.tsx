@@ -6,10 +6,58 @@ import { ProbBars, DivergingBars } from "@/components/Bars";
 import { DotPlot } from "@/components/DotPlot";
 import { ErrorCard } from "@/components/ErrorCard";
 import { courseDeviation } from "@/lib/course";
+import type { TrifectaPick } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 const LANES = [1, 2, 3, 4, 5, 6];
+
+/**
+ * 買い目の表。3連単と3連複で同じ列・同じ並び順で出す。
+ * 券種ごとに見せ方を変えると、期待値を並べて比べられなくなる。
+ */
+function PickTable({
+  picks,
+  provisional,
+}: {
+  picks: TrifectaPick[];
+  provisional?: boolean;
+}) {
+  if (picks.length === 0) {
+    if (provisional) return null;
+    return (
+      <p className="muted" style={{ fontSize: 13 }}>
+        オッズが取れていないため算出していません
+      </p>
+    );
+  }
+  return (
+    <div className="scroll-x">
+      <table>
+        <thead>
+          <tr>
+            <th className="l">買い目</th>
+            <th>予測確率</th>
+            <th>オッズ</th>
+            <th>期待値</th>
+          </tr>
+        </thead>
+        <tbody>
+          {picks.map((pick) => (
+            <tr key={pick.combo}>
+              <td className="l num">{pick.combo}</td>
+              <td className="num">{(pick.prob * 100).toFixed(1)}%</td>
+              <td className="num">{pick.odds.toFixed(1)}</td>
+              <td className={pick.ev >= 1 ? "num best" : "num"}>
+                {pick.ev.toFixed(2)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export default async function RacePage({
   params,
@@ -141,6 +189,7 @@ export default async function RacePage({
     ? modelValues.reduce((a, b) => ((b.value ?? -1) > (a.value ?? -1) ? b : a))
     : null;
   const picks = race.picks ?? [];
+  const trioPicks = race.trio_picks ?? [];
 
   return (
     <main className="wrap">
@@ -262,36 +311,13 @@ export default async function RacePage({
                   オッズが公開されてから算出します。
                 </p>
               )}
-              {picks.length > 0 ? (
-                <div className="scroll-x">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th className="l">買い目</th>
-                        <th>予測確率</th>
-                        <th>オッズ</th>
-                        <th>期待値</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {picks.map((pick) => (
-                        <tr key={pick.combo}>
-                          <td className="l num">{pick.combo}</td>
-                          <td className="num">{(pick.prob * 100).toFixed(1)}%</td>
-                          <td className="num">{pick.odds.toFixed(1)}</td>
-                          <td className={pick.ev >= 1 ? "num best" : "num"}>
-                            {pick.ev.toFixed(2)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : race.provisional ? null : (
-                <p className="muted" style={{ fontSize: 13 }}>
-                  オッズが取れていないため算出していません
-                </p>
-              )}
+              <PickTable picks={picks} provisional={race.provisional} />
+
+              <p className="sub" style={{ marginTop: 18 }}>
+                推奨買い目（3連複）
+              </p>
+              <PickTable picks={trioPicks} provisional={race.provisional} />
+
               <p
                 className="muted"
                 style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}
@@ -301,6 +327,14 @@ export default async function RacePage({
                 並んでいるのは当たりやすい順ではなく、
                 <strong>オッズに対して確率が高い順</strong>です。本命が頭に
                 入らない買い目もあります。
+              </p>
+              <p
+                className="muted"
+                style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}
+              >
+                3連複は3艇の<strong>着順を問いません</strong>。的が20通りと
+                狭いぶん当たりやすく、そのぶんオッズは低くなります。3連単と
+                どちらが有利かは的中しやすさではなく期待値で比べてください。
               </p>
             </div>
           </div>

@@ -46,7 +46,7 @@ export async function getDay(date: string): Promise<DayData | null> {
        race_entries ( * ),
        race_results ( winner_lane, finish, kimarite, payouts ),
        odds_snapshots ( overround, market_prob, captured_at ),
-       predictions ( model_prob, ev, top_lane, top_ev, picks,
+       predictions ( model_prob, ev, top_lane, top_ev, picks, trio_picks,
                      pub_prob, blend_weight, provisional, calibrated,
                      created_at )`
     )
@@ -147,6 +147,7 @@ function toRace(row: any): Race {
     race.top_lane = prediction.top_lane ?? undefined;
     race.top_ev = prediction.top_ev ?? undefined;
     race.picks = prediction.picks ?? undefined;
+    race.trio_picks = prediction.trio_picks ?? undefined;
     race.pub_prob = prediction.pub_prob ?? undefined;
     race.blend_weight = prediction.blend_weight ?? undefined;
     race.provisional = prediction.provisional ?? undefined;

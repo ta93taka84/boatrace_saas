@@ -56,12 +56,45 @@ THEORETICAL_RETURN = 1.0 - TAKEOUT_RATE
 #
 # **どの w でも推奨買い目の並び順は変わらない。** EVは (モデル確率/市場確率) の
 # 単調増加なので、w は目盛りを決めるだけで順位を動かさない。
+#
+# **三連複にも同じ w を使う（2026-09-16 に確認）。** 券種ごとに別の重みを置く
+# 理由があるかを `experiment.py` の `trio_blend_check`（trifecta_blend_check と
+# 同じ実行で出る）で測った。検証1067レース。
+#
+#   w     三連複LogLoss  市場との差          三連単での差（比較用）
+#   0.0     2.2931       —                   —
+#   0.1     2.2921       -0.0010 ± 0.0015    -0.0002 ± 0.0019
+#   0.2     2.2934       +0.0003 ± 0.0030    +0.0033 ± 0.0037   ← 採用
+#   0.4     2.3033       +0.0102 ± 0.0060    +0.0207 ± 0.0073
+#   0.5     2.3121       +0.0190 ± 0.0076    +0.0347 ± 0.0091
+#   1.0     2.4334       +0.1403 ± 0.0208    +0.2104 ± 0.0241
+#
+# 三連複のほうが市場から離れても傷が浅い（上限は 0.4 まで誤差の範囲）。的が
+# 20通りしかないぶん着順の読み違いが効かないためで、モデルが良くなった
+# わけではない。**ゆるいほうに合わせて w を上げないこと。** 同じ model_prob
+# から両方を作っている以上、券種ごとに重みを変えると、画面上で同じレースの
+# 同じ3艇に2つの異なる確率が並ぶ。0.2 は三連複でも 0.1倍SE と市場並みなので、
+# 揃えておいて失うものが無い。
 BLEND_WEIGHT = 0.2
 
 # 推奨買い目として出す三連単の本数。
 # 120通りのうちEVの高い順に切る。増やすほど「どれかは当たる」に近づいて
 # 見かけの的中率が上がるので、本数を増やして成績を良く見せないこと。
 TRIFECTA_PICKS = 5
+
+# 推奨買い目として出す三連複の本数。
+# **三連単と同じ5本にしていない。** 的が20通りしかないので、5本は場の4分の1に
+# あたる。三連単の5本（120通りのうち4%）と同じ「5本」という見た目で並べると、
+# 張る範囲の広さの違いが隠れる。
+#
+# なお**「三連複のほうが当たりやすいから本数を減らした」ではない。** 推奨は
+# EV順に切るので、選ばれるのは確率の高い目ではなく、オッズに対して確率が高い
+# 目である。実際、推奨に入った目の確率の合計は三連単5本と三連複3本でほぼ
+# 同じだった（ある1レースで 0.029 と 0.031）。「三連複は当たりやすい」が
+# 効くのは同じ3艇どうしを比べたときで（trio_probs は三連単6通りの和なので
+# 必ず大きい）、推奨の並びどうしの比較ではない。
+# いずれにせよ画面では的中しやすさではなく期待値で比べさせること。
+TRIO_PICKS = 3
 
 # コース別1着率のベースライン（全場平均の概算値）。
 # backtest.py calibrate が scraper/course_rates.json を作ると、
@@ -219,7 +252,8 @@ def _feature(racer: dict, name: str, conditions: dict | None) -> float:
 def score_race(racers: list[dict], market_prob: dict[int, float] | None,
                venue_code: str | None = None,
                conditions: dict | None = None,
-               trifecta_odds: dict[str, float] | None = None) -> dict:
+               trifecta_odds: dict[str, float] | None = None,
+               trio_odds: dict[str, float] | None = None) -> dict:
     """
     戻り値:
     {
@@ -228,9 +262,13 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
       "top_lane": 3,                   # 最高EVの艇番
       "top_ev": 1.21,
       "picks": [{"combo": "1-3-5", "prob": 0.041, "odds": 29.5, "ev": 1.21}, ...],
+      "trio_picks": [{"combo": "1-3-5", "prob": 0.15, "odds": 7.8, "ev": 1.17}, ...],
     }
     market_prob が無い場合は ev を空で返す。
     trifecta_odds（三連単120通り）が無い場合は picks を返さない。
+    trio_odds（三連複20通り）が無い場合は trio_picks を返さない。
+    三連単のオッズだけが取れて三連複が取れなかった場合は、picks だけが出る。
+    片方の取得失敗でもう片方を落とさないこと。
     conditions（気象）が無い場合は風と波の項が落ちるだけで、他はそのまま効く。
     """
     model_prob = estimate_win_prob(racers, venue_code, conditions)
@@ -259,6 +297,11 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
         picks = recommend_trifecta(model_prob, trifecta_odds, weight=BLEND_WEIGHT)
         if picks:
             result["picks"] = picks
+
+    if trio_odds:
+        trio = recommend_trio(model_prob, trio_odds, weight=BLEND_WEIGHT)
+        if trio:
+            result["trio_picks"] = trio
 
     return result
 
@@ -325,6 +368,28 @@ def trifecta_probs(model_prob: dict[int, float],
     return {k: v / total for k, v in out.items()}
 
 
+def trio_probs(model_prob: dict[int, float],
+               corr: tuple[dict, dict] | None = None) -> dict[str, float]:
+    """
+    三連複20通りの確率を、三連単120通りから畳んで作る。
+
+        P({a,b,c}) = Σ P(a⇒b⇒c) （6通りの並べ替えすべての和）
+
+    **これは近似ではなく厳密な変換である。** 着順を問わない事象は、着順を
+    区別した事象の排反な和そのものなので、三連単の分布が正しければ三連複の
+    分布も同じだけ正しい。したがって三連複のためにモデルを作り直す必要はなく、
+    検証済みの trifecta_probs（着順相関の補正込み）をそのまま使える。
+
+    corr の扱いは trifecta_probs と同じ。検証から呼ぶときは学習側だけから
+    作った表を明示的に渡すこと。
+    """
+    out: dict[str, float] = {}
+    for combo, p in trifecta_probs(model_prob, corr).items():
+        key = "-".join(sorted(combo.split("-"), key=int))
+        out[key] = out.get(key, 0.0) + p
+    return out
+
+
 def blend_with_market(model_prob: dict[int, float],
                       market_prob: dict[int, float],
                       weight: float) -> dict[int, float]:
@@ -375,6 +440,44 @@ def recommend_trifecta(model_prob: dict[int, float],
     picks = []
     for combo, p in probs.items():
         odds = trifecta_odds.get(combo)
+        if not odds:
+            continue
+        picks.append({
+            "combo": combo,
+            "prob": round(p, 5),
+            "odds": float(odds),
+            "ev": round(p * float(odds), 3),
+        })
+    picks.sort(key=lambda x: (-x["ev"], -x["prob"]))
+    return picks[:limit]
+
+
+def recommend_trio(model_prob: dict[int, float],
+                   trio_odds: dict[str, float],
+                   limit: int = TRIO_PICKS,
+                   weight: float = 1.0) -> list[dict]:
+    """
+    三連複のオッズと照らし合わせて、EVの高い順に買い目を返す。
+
+        EV = 公開確率 × 三連複オッズ
+
+    recommend_trifecta と同じ形。確率は trio_probs（三連単を畳んだもの）で作り、
+    weight で市場へ引き戻す。**引き戻しの相手は三連複のオッズが示す確率である。**
+    三連単のオッズを畳んだものを使ってはならない。別勘定の投票なので、同じ3艇
+    でも2つの市場の見立てはずれる。買うのは三連複のほうなので、合わせる相手も
+    三連複でなければ、画面に出るEVがどの市場に対するものか分からなくなる。
+    """
+    probs = trio_probs(model_prob)
+    if weight < 1.0:
+        inv = {k: 1.0 / o for k, o in trio_odds.items() if o}
+        total = sum(inv.values())
+        if total > 0:
+            market = {k: v / total for k, v in inv.items()}
+            probs = {k: (1 - weight) * market.get(k, 0.0) + weight * p
+                     for k, p in probs.items()}
+    picks = []
+    for combo, p in probs.items():
+        odds = trio_odds.get(combo)
         if not odds:
             continue
         picks.append({

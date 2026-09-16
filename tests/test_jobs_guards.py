@@ -123,7 +123,7 @@ class DeadlineOrder(unittest.TestCase):
             return None
 
         with mock.patch.object(jobs, "get_active_venues", return_value=venues),              mock.patch.object(jobs, "get_close_times",
-                               side_effect=lambda d, code: times[code]),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", side_effect=odds),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"):
+                               side_effect=lambda d, code: times[code]),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", side_effect=odds),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"):
             jobs.prerace(30, "20260909", strict=False)
 
         self.assertEqual(fetched, ["02", "01"],
@@ -186,7 +186,7 @@ class LateFetchIsReported(unittest.TestCase):
 
         venue = {"code": "05", "name": "多摩川"}
         with mock.patch.object(jobs, "datetime", FakeDatetime),              mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times",
-                               return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"):
+                               return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=None),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"):
             return jobs.prerace(30, "20260909", strict=False,
                                 report_late=report_late)
 
@@ -230,7 +230,7 @@ class WeatherIsRefreshedNearDeadline(unittest.TestCase):
         called = []
         with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times",
                                return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo",
-                               side_effect=lambda *a: called.append(a) or None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+                               side_effect=lambda *a: called.append(a) or None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=None),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
             jobs.prerace(30, "20260909", strict=False, report_late=False)
         return called
 
@@ -268,12 +268,76 @@ class ProvisionalIsClearedOnRaceDay(unittest.TestCase):
                 "overround": 1.335, "odds": {"1-2-3": 9.6}}
 
         with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times",
-                               return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=odds),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+                               return_value={1: close.strftime("%H:%M")}),              mock.patch.object(jobs, "get_beforeinfo", return_value=None),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_odds", return_value=odds),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
             jobs.prerace(30, "20260910", strict=False, report_late=False)
 
         slot = data["venues"][0]["races"][0]
         self.assertNotIn("provisional", slot)
         self.assertIn("picks", slot)
+
+
+class TrioOddsFailure(unittest.TestCase):
+    """
+    三連複オッズは三連単とは別ページなので、片方だけ落ちる経路がある。
+
+    **握りつぶすが、黙らない。** 個々の取得失敗でパスを落とすと、締切前に
+    出せたはずの三連単の買い目まで失う。一方、握ったままにすると、odds3f の
+    組版が変わったときに三連複の買い目が画面から静かに消え続ける。そこで
+    「1パスで三連単が取れているのに三連複が1件も取れない」だけを問題に数える。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, trio):
+        from datetime import datetime, timedelta
+
+        close = datetime.now() + timedelta(minutes=10)
+        venue = {"code": "05", "name": "多摩川"}
+        racers = [{"lane": i, "class": "B1", "win_rate_all": 5.0,
+                   "win_rate_venue": 5.0, "avg_st": 0.16, "motor_in2_rate": 35.0,
+                   "boat_in2_rate": 35.0, "weight": 52.0, "f_count": 0,
+                   "in2_rate_all": 30.0} for i in range(1, 7)]
+        self.data = {"venues": [{"code": "05", "name": "多摩川", "races": [
+            {"race_no": 1, "racers": racers}]}]}
+        odds = {"market_prob": {i: 1 / 6 for i in range(1, 7)},
+                "overround": 1.335, "odds": {"1-2-3": 9.6}}
+
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]), \
+             mock.patch.object(jobs, "get_close_times",
+                               return_value={1: close.strftime("%H:%M")}), \
+             mock.patch.object(jobs, "get_beforeinfo", return_value=None), \
+             mock.patch.object(jobs, "get_racelist", return_value=None), \
+             mock.patch.object(jobs, "get_odds", return_value=odds), \
+             mock.patch.object(jobs, "get_trio_odds", **trio), \
+             mock.patch.object(jobs, "_load", return_value=self.data), \
+             mock.patch.object(jobs, "_save"):
+            return jobs.prerace(30, "20260910", strict=False, report_late=False)
+
+    def test_exception_does_not_lose_the_trifecta_picks(self):
+        """三連複の取得が例外でも、三連単の買い目は締切前に出す。"""
+        problems = self._run({"side_effect": RuntimeError("Read timed out")})
+        slot = self.data["venues"][0]["races"][0]
+        self.assertIn("picks", slot)
+        self.assertNotIn("trio_picks", slot)
+        self.assertTrue(any("三連複" in p for p in problems), problems)
+
+    def test_total_failure_is_reported(self):
+        """
+        三連単が取れて三連複が1件も取れないのは組版変更の印。
+        ここを黙らせると、買い目が消えたことに誰も気づけない。
+        """
+        problems = self._run({"return_value": None})
+        self.assertTrue(any("三連複" in p for p in problems), problems)
+
+    def test_success_is_not_a_problem(self):
+        trio = {"1-2-3": 4.3, "1-2-4": 2.9}
+        problems = self._run({"return_value": trio})
+        slot = self.data["venues"][0]["races"][0]
+        self.assertEqual(slot["trio_odds"], trio)
+        self.assertIn("trio_picks", slot)
+        self.assertFalse([p for p in problems if "三連複" in p], problems)
 
 
 class LoopIntervalGuard(unittest.TestCase):
@@ -339,7 +403,7 @@ class TomorrowJob(unittest.TestCase):
         with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times", return_value={1: "11:00"}),              mock.patch.object(jobs, "get_racelist",
                                side_effect=lambda d, v, r: (
                                    {"race_no": r, "racers": self.RACERS}
-                                   if r == 1 else None)),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"),              mock.patch.object(jobs, "_sync_to_db", return_value="(取り込み省略)"):
+                                   if r == 1 else None)),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"),              mock.patch.object(jobs, "_sync_to_db", return_value="(取り込み省略)"):
             jobs.tomorrow("20260910")
         return data["venues"][0]["races"][0]
 
@@ -367,7 +431,7 @@ class TomorrowJob(unittest.TestCase):
     def test_no_race_exits(self):
         """1レースも取れなければ失敗にする。0件で正常終了させない。"""
         venue = {"code": "05", "name": "多摩川"}
-        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times", return_value={}),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"),              mock.patch.object(jobs, "_sync_to_db", return_value=""):
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_close_times", return_value={}),              mock.patch.object(jobs, "get_racelist", return_value=None),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value={"venues": []}),              mock.patch.object(jobs, "_save"),              mock.patch.object(jobs, "_sync_to_db", return_value=""):
             with self.assertRaises(SystemExit) as cm:
                 jobs.tomorrow("20260910")
         self.assertEqual(cm.exception.code, 1)
@@ -438,7 +502,7 @@ class ResultsJobEmptyDay(unittest.TestCase):
     def _run(self, slot):
         venue = {"code": "05", "name": "多摩川"}
         data = {"venues": [{"code": "05", "name": "多摩川", "races": [slot]}]}
-        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_result", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+        with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_result", return_value=None),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
             jobs.results("20260910")
 
     def test_all_already_collected_is_fine(self):
@@ -500,7 +564,7 @@ class CancelledRaceIsNotMissing(unittest.TestCase):
         data = {"venues": [{"code": "05", "name": "多摩川", "races": [slot]}]}
         called = []
         with mock.patch.object(jobs, "get_active_venues", return_value=[venue]),              mock.patch.object(jobs, "get_result",
-                               side_effect=lambda *a: called.append(a) or result),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
+                               side_effect=lambda *a: called.append(a) or result),              mock.patch.object(jobs, "get_trio_odds", return_value=None),              mock.patch.object(jobs, "_load", return_value=data),              mock.patch.object(jobs, "_save"):
             jobs.results("20260910")
         return data["venues"][0]["races"][0], called
 

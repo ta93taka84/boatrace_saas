@@ -1,4 +1,4 @@
-"""三連単オッズを取得し、市場の勝率期待値（インプライド確率）を算出する。"""
+"""三連単・三連複オッズを取得し、市場の勝率期待値（インプライド確率）を算出する。"""
 from bs4 import BeautifulSoup
 from .session import fetch
 
@@ -32,6 +32,28 @@ def get_odds(date_str: str, venue_code: str, race_no: int) -> dict | None:
     }
 
 
+def get_trio_odds(date_str: str, venue_code: str, race_no: int) -> dict[str, float] | None:
+    """
+    三連複20通りのオッズを返す。取れなければ None。
+
+        {"1-2-3": 4.3, "1-2-4": 2.9, ...}   艇番は昇順
+
+    **三連単から計算で出していない。** 三連複は別勘定の投票で、払戻も別に
+    決まる。三連単オッズの逆数を6通り足せば「市場が着順を問わずその3艇と
+    見ている確率」は出るが、それは三連複の配当ではない。推奨買い目に添える
+    オッズは実際に払い戻される数字でなければ意味がないので、専用ページを引く。
+
+    そのぶん1レースあたり1リクエスト増える。`session.SLEEP_SEC` の2秒間隔は
+    守られるので、増えるのは巡回1周にかかる時間である。`prerace-loop` は
+    締切の早い順に取るため、この増加は締切間際のレースの取りこぼしに
+    直結する。間隔と窓の余裕を削ってまで本数を増やさないこと。
+    """
+    params = {"rno": race_no, "jcd": venue_code, "hd": date_str}
+    html = fetch("/owpc/pc/race/odds3f", params=params)
+    soup = BeautifulSoup(html, "lxml")
+    return _parse_combo_odds(soup) or None
+
+
 def _parse_trifecta_odds(soup) -> dict[str, float]:
     """
     三連単オッズ表をパースする。
@@ -39,6 +61,19 @@ def _parse_trifecta_odds(soup) -> dict[str, float]:
     表は「1着艇ごとの6列グループ × 20行」構成。2着セルは rowspan=4 で
     4行に1度しか現れないため、グループ内で直前の2着を持ち越す必要がある。
     各グループは td.oddsPoint で終わるので、それを区切りにチャンク分割する。
+    """
+    return _parse_combo_odds(soup)
+
+
+def _parse_combo_odds(soup) -> dict[str, float]:
+    """
+    三連単と三連複の両方のオッズ表をパースする。
+
+    **2つのページは同じ組版である。** どちらも「先頭の艇ごとの6列グループ」で、
+    グループ内は rowspan で2番目の艇をまとめ、各行が td.oddsPoint で終わる。
+    違うのは行数（三連単は120通り、三連複は20通り）と、三連複では組み合わせが
+    常に昇順に並ぶことだけ。パーサーを分けると、公式サイトの組版が変わった
+    ときに片方だけ直して気づかない形になるので、一本にしてある。
     """
     table = next((t for t in soup.select("table") if t.select_one("td.oddsPoint")), None)
     if table is None:

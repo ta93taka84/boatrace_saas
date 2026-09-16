@@ -139,6 +139,13 @@ create table if not exists odds_snapshots (
   trifecta     jsonb not null    -- {"1-2-3":9.6,...} 120通り
 );
 
+-- 既に作ってあるDBへの追加（create table if not exists は列を増やさない）。
+-- 三連複20通りのオッズ。三連単とは別勘定の投票で払戻も別に決まるので、
+-- trifecta から計算で出せる値ではなく、専用ページから取った実数を入れる。
+-- 取れなかったパスでは NULL。三連単が取れて三連複だけ落ちる経路があるため、
+-- not null にはしない。
+alter table odds_snapshots add column if not exists trio jsonb;
+
 create index if not exists odds_race_captured_idx
   on odds_snapshots (race_id, captured_at desc);
 
@@ -197,6 +204,9 @@ alter table predictions add column if not exists picks jsonb;
 alter table predictions add column if not exists pub_prob jsonb;
 alter table predictions add column if not exists blend_weight numeric(4,2);
 alter table predictions add column if not exists provisional boolean not null default false;
+-- 三連複の推奨買い目。picks（三連単）と同じ形の配列で、本数だけ少ない
+-- （scraper/scoring.py の TRIO_PICKS）。三連複のオッズが取れなかったレースでは NULL。
+alter table predictions add column if not exists trio_picks jsonb;
 
 create index if not exists predictions_version_idx
   on predictions (model_version, created_at desc);

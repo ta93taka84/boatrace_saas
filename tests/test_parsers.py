@@ -110,6 +110,48 @@ class TestOdds(unittest.TestCase):
         self.assertEqual(sorted(market_prob), [1, 2, 3, 4, 5, 6])
 
 
+class TestTrioOdds(unittest.TestCase):
+    """
+    三連複オッズ（odds3f）。三連単と同じ組版なのでパーサーを共有している。
+    共有しているぶん、片方だけ壊れたことに気づけるよう両方を固定しておく。
+    """
+
+    def setUp(self):
+        self.odds_map = odds._parse_combo_odds(soup_of("odds3f.html"))
+
+    def test_all_20_combinations(self):
+        """rowspanの持ち越しを誤ると組み合わせが欠ける。"""
+        self.assertEqual(len(self.odds_map), 20)
+
+    def test_combinations_are_ascending_and_distinct(self):
+        """
+        三連複の目は昇順の3艇。降順や重複が出たら、列グループの
+        読み違い（先頭艇と2番目の取り違え）が起きている。
+        """
+        for combo in self.odds_map:
+            lanes = [int(x) for x in combo.split("-")]
+            self.assertEqual(len(set(lanes)), 3, f"同じ艇が重複: {combo}")
+            self.assertEqual(lanes, sorted(lanes), f"昇順でない: {combo}")
+            self.assertTrue(all(1 <= l <= 6 for l in lanes), f"艇番が範囲外: {combo}")
+
+    def test_covers_every_first_lane_group(self):
+        """
+        先頭艇ごとの本数は 10/6/3/1。持ち越しが列をまたいで漏れると崩れる。
+        """
+        expected = {1: 10, 2: 6, 3: 3, 4: 1}
+        for lane, n in expected.items():
+            got = sum(1 for k in self.odds_map if k.startswith(f"{lane}-"))
+            self.assertEqual(got, n, f"{lane}を含む先頭の組み合わせが{got}件")
+
+    def test_overround_matches_takeout_rate(self):
+        """
+        三連複も控除率25%。合計が1.33前後から外れたら取りこぼしを疑う。
+        三連単と別勘定の投票なので、こちらはこちらで見る必要がある。
+        """
+        total = sum(1.0 / v for v in self.odds_map.values())
+        self.assertAlmostEqual(total, 1.0 / 0.75, delta=0.05)
+
+
 class TestBeforeinfoMachine(unittest.TestCase):
     """
     プロペラ・部品交換・前走成績。

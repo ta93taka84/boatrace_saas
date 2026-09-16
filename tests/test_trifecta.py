@@ -8,6 +8,13 @@
 2. 期待値に控除率を掛けてしまう（オッズには既に控除が入っているので二重に引く）
 3. 推奨をEV順でなく確率順に並べてしまう（本命ばかり並び、推奨の意味が消える）
 
+三連複を足したことで、同じ性質の落とし穴が2つ増えた。どちらも画面は普通に見える。
+
+4. 三連複の確率を、三連単の一部（例えば 1-2-3 の並びだけ）で作ってしまう。
+   6通りの和にならないので、当たる確率を6分の1近くまで小さく見積もる。
+5. 三連複のオッズを三連単から計算で作ってしまう。別勘定の投票なので、
+   画面に出る配当が実際に払い戻される額と食い違う。
+
 実行:
   py -3 -m unittest discover -s tests
 """
@@ -18,7 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scraper.scoring import (BLEND_WEIGHT, blend_with_market, order_corr,
-                             recommend_trifecta, score_race, trifecta_probs)
+                             recommend_trifecta, recommend_trio, score_race,
+                             trifecta_probs, trio_probs)
 
 PROB = {1: 0.45, 2: 0.18, 3: 0.14, 4: 0.12, 5: 0.07, 6: 0.04}
 
@@ -175,6 +183,113 @@ class RecommendTest(unittest.TestCase):
         self.assertEqual([p["combo"] for p in picks], ["1-2-3"])
 
 
+class TrioProbsTest(unittest.TestCase):
+    """三連複の確率は、三連単を着順ごとに畳んだものでなければならない。"""
+
+    def test_covers_all_20_and_sums_to_one(self):
+        probs = trio_probs(PROB)
+        self.assertEqual(len(probs), 20)
+        self.assertAlmostEqual(sum(probs.values()), 1.0, places=9)
+
+    def test_is_exactly_the_folded_trifecta(self):
+        """
+        **ここが三連複の核心。** 着順を問わない的の確率は、着順を区別した
+        6通りの確率の和そのものである。近似ではないので、一致は厳密でよい。
+        片方だけ別の組み立て方に変えたら、ここで落ちる。
+        """
+        tri = trifecta_probs(PROB)
+        folded = {}
+        for combo, p in tri.items():
+            key = "-".join(sorted(combo.split("-"), key=int))
+            folded[key] = folded.get(key, 0.0) + p
+        got = trio_probs(PROB)
+        self.assertEqual(sorted(got), sorted(folded))
+        for key, want in folded.items():
+            self.assertAlmostEqual(got[key], want, places=12, msg=key)
+
+    def test_combos_are_ascending(self):
+        for combo in trio_probs(PROB):
+            lanes = [int(x) for x in combo.split("-")]
+            self.assertEqual(lanes, sorted(lanes), f"昇順でない: {combo}")
+
+    def test_bigger_than_any_single_order(self):
+        """
+        着順を問わないぶん、必ずどの並び単独よりも当たりやすい。
+        三連単の1本をそのまま三連複として出す間違いは、ここで落ちる。
+        """
+        tri = trifecta_probs(PROB)
+        trio = trio_probs(PROB)
+        for combo, p in trio.items():
+            a, b, c = combo.split("-")
+            self.assertGreater(p, tri[f"{a}-{b}-{c}"], combo)
+
+    def test_first_place_probability_is_not_disturbed(self):
+        """
+        畳んでも1着の確率は動かない。ある艇を含む的の確率の和は、
+        その艇が3着以内に入る確率になる（1着率ではない）ので、
+        ここでは三連単側の総和との一致だけを見る。
+        """
+        tri = trifecta_probs(PROB)
+        trio = trio_probs(PROB)
+        self.assertAlmostEqual(sum(tri.values()), sum(trio.values()), places=12)
+
+
+class RecommendTrioTest(unittest.TestCase):
+    def _odds(self):
+        # 三連複20通りを「モデル確率どおり・控除率25%」に置く。
+        # EVが全部0.75になるので、1本だけ厚くした目が先頭に来るはず。
+        probs = trio_probs(PROB)
+        odds = {k: 0.75 / v for k, v in probs.items()}
+        odds["4-5-6"] = odds["4-5-6"] * 3
+        return odds
+
+    def test_expected_value_is_prob_times_odds(self):
+        """控除率を重ねて掛けないこと。オッズに既に入っている。"""
+        picks = recommend_trio(PROB, self._odds(), limit=20)
+        self.assertEqual(len(picks), 20)
+        for pick in picks:
+            self.assertAlmostEqual(pick["ev"], pick["prob"] * pick["odds"], delta=0.02)
+            self.assertNotAlmostEqual(pick["ev"],
+                                      pick["prob"] * pick["odds"] * 0.75, delta=0.02)
+
+    def test_sorted_by_ev_not_by_probability(self):
+        picks = recommend_trio(PROB, self._odds(), limit=3)
+        self.assertEqual(picks[0]["combo"], "4-5-6")
+        evs = [p["ev"] for p in picks]
+        self.assertEqual(evs, sorted(evs, reverse=True))
+
+    def test_limit_is_respected(self):
+        self.assertEqual(len(recommend_trio(PROB, self._odds(), limit=3)), 3)
+
+    def test_skips_combos_without_odds(self):
+        """オッズが欠けた買い目を、確率だけで推奨してはいけない。"""
+        picks = recommend_trio(PROB, {"1-2-3": 4.3}, limit=5)
+        self.assertEqual([p["combo"] for p in picks], ["1-2-3"])
+
+    def test_blends_against_the_trio_market(self):
+        """
+        **引き戻す相手は三連複のオッズでなければならない。** 三連単を畳んだ
+        確率で引き戻すと、画面のEVがどの市場に対する値か分からなくなる。
+
+        三連複だけを一方向に歪めたオッズ表を渡し、混合後の確率がその歪みの
+        向きへ動くことを見る。三連単側を見ていたら動かない。
+        """
+        odds = self._odds()
+        # 1-2-3 のオッズだけ極端に薄くする＝市場はこの目を本命と見ている
+        odds["1-2-3"] = 1.01
+        full = recommend_trio(PROB, odds, limit=20, weight=1.0)
+        blended = recommend_trio(PROB, odds, limit=20, weight=0.2)
+        p_full = next(p["prob"] for p in full if p["combo"] == "1-2-3")
+        p_blend = next(p["prob"] for p in blended if p["combo"] == "1-2-3")
+        self.assertGreater(p_blend, p_full)
+
+    def test_blending_shrinks_expected_value(self):
+        odds = self._odds()
+        full = recommend_trio(PROB, odds, limit=1, weight=1.0)
+        blended = recommend_trio(PROB, odds, limit=1, weight=BLEND_WEIGHT)
+        self.assertLess(blended[0]["ev"], full[0]["ev"])
+
+
 class BlendTest(unittest.TestCase):
     """
     公開する確率を市場へ引き戻す処理。
@@ -247,6 +362,33 @@ class ScoreRaceTest(unittest.TestCase):
     def test_picks_present_with_odds(self):
         scores = score_race(self.RACERS, None, trifecta_odds={"1-2-3": 9.6})
         self.assertEqual(scores["picks"][0]["combo"], "1-2-3")
+
+    def test_trio_picks_absent_without_trio_odds(self):
+        scores = score_race(self.RACERS, None, trifecta_odds={"1-2-3": 9.6})
+        self.assertNotIn("trio_picks", scores)
+
+    def test_trio_picks_present_with_trio_odds(self):
+        scores = score_race(self.RACERS, None, trio_odds={"1-2-3": 4.3})
+        self.assertEqual(scores["trio_picks"][0]["combo"], "1-2-3")
+
+    def test_each_ticket_type_survives_the_other_failing(self):
+        """
+        **片方のオッズが取れなくても、もう片方の買い目を落とさないこと。**
+        三連単と三連複は別ページなので、片方だけ取れる経路が実際にある。
+        ここで巻き添えにすると、締切前に出せたはずの買い目が消える。
+        """
+        only_tri = score_race(self.RACERS, None, trifecta_odds={"1-2-3": 9.6})
+        self.assertIn("picks", only_tri)
+        self.assertNotIn("trio_picks", only_tri)
+
+        only_trio = score_race(self.RACERS, None, trio_odds={"1-2-3": 4.3})
+        self.assertIn("trio_picks", only_trio)
+        self.assertNotIn("picks", only_trio)
+
+        both = score_race(self.RACERS, None, trifecta_odds={"1-2-3": 9.6},
+                          trio_odds={"1-2-3": 4.3})
+        self.assertIn("picks", both)
+        self.assertIn("trio_picks", both)
 
     def test_pub_prob_is_pulled_toward_market(self):
         """画面に出るのは pub_prob。市場が無い時間帯だけモデル単独になる。"""

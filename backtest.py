@@ -110,6 +110,10 @@ def _build_row(date_str, venue, rno):
         "market_prob": odds["market_prob"],
         "winner_lane": result["winner_lane"],
         "trifecta_payout": result["payouts"].get("3連単", {}).get("payout"),
+        # 三連複の配当。結果ページの同じ表に載っているので取得は増えない。
+        # 三連複の買い目を画面に出す以上、その成績を後から検証できる
+        # ようにしておく必要がある。
+        "trio_payout": result["payouts"].get("3連複", {}).get("payout"),
         "kimarite": result.get("kimarite"),
         "start": result.get("start"),
         "finish": result.get("finish"),
@@ -553,6 +557,8 @@ def import_daily():
                     "start_exhibition": exhibition,
                     "trifecta_payout": (result.get("payouts") or {})
                         .get("3連単", {}).get("payout"),
+                    "trio_payout": (result.get("payouts") or {})
+                        .get("3連複", {}).get("payout"),
                 })
                 existing.add(key)
 

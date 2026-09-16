@@ -867,25 +867,49 @@ def trifecta_blend_check(rows, steps=21):
             continue
         model = trifecta_probs(m, corr)
         combo = "-".join(str(l) for l, _ in top3)
-        if combo in market and combo in model:
-            data.append((row["date"], market[combo], model[combo]))
+        if combo not in market or combo not in model:
+            continue
+
+        # 三連複は同じ材料を畳むだけなので、オッズを取り直さずに同時に採点できる。
+        # 市場側も同様に、三連単120通りのインプライド確率を的の6通りだけ足す。
+        # **三連複のオッズを別に取ってきているわけではない。** ここで測っている
+        # のは「着順を問わない的に畳んだとき、モデルと市場のどちらが確からしいか」
+        # であって、三連複の配当そのものではない。
+        trio = "-".join(sorted((str(l) for l, _ in top3), key=int))
+        market_trio = sum(v for k, v in market.items()
+                          if "-".join(sorted(k.split("-"), key=int)) == trio)
+        model_trio = sum(v for k, v in model.items()
+                         if "-".join(sorted(k.split("-"), key=int)) == trio)
+        data.append((row["date"], market[combo], model[combo],
+                     market_trio, model_trio))
 
     if len(data) < 100:
         print(f"[三連単の混合] キャッシュ済みのオッズが{len(data)}件しかないため省略")
         return
 
+    _blend_report(data, cut_date, steps, 1, 2, "三連単の混合")
+    _blend_report(data, cut_date, steps, 3, 4, "三連複の混合")
+
+
+def _blend_report(data, cut_date, steps, k_idx, m_idx, label):
+    """市場確率とモデル確率の混合を、的中目のLogLossで採点して並べる。
+
+    三連単と三連複で同じ表を出す。列の意味も判定の仕方も変わらないので、
+    片方だけ別の見せ方にすると比較ができなくなる。
+    """
     train = [d for d in data if d[0] < cut_date]
     test = [d for d in data if d[0] >= cut_date]
     if not train or not test:
         return
 
     def losses(part, w):
-        return [-math.log(max((1 - w) * k + w * m, 1e-12)) for _, k, m in part]
+        return [-math.log(max((1 - w) * d[k_idx] + w * d[m_idx], 1e-12))
+                for d in part]
 
     grid = [i / (steps - 1) for i in range(steps)]
     best = min(grid, key=lambda w: sum(losses(train, w)) / len(train))
     base = losses(test, 0.0)
-    print(f"[三連単の混合] 学習{len(train)} / 検証{len(test)}レース"
+    print(f"[{label}] 学習{len(train)} / 検証{len(test)}レース"
           f"  学習側で選ばれた w = {best:.2f}")
     print(f"  {'w':>4} {'検証LogLoss':>12} {'市場との差':>12} {'':>8} {'判定':>10}")
     for i in range(0, 11):
