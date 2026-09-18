@@ -96,6 +96,12 @@ TRIFECTA_PICKS = 5
 # いずれにせよ画面では的中しやすさではなく期待値で比べさせること。
 TRIO_PICKS = 3
 
+# 確率ランキング用に、1レースあたり何点ぶん確率順の目を持たせるか。
+# **これは推奨買い目の本数ではない。** トップページがその日の全レースを
+# またいで上位10点を並べるための材料で、1レースから何点も入ることは
+# 稀なので3点で足りる。ここを増やしても画面に出る点数は変わらない。
+PROB_PICKS = 3
+
 # コース別1着率のベースライン（全場平均の概算値）。
 # backtest.py calibrate が scraper/course_rates.json を作ると、
 # 実測から縮小推定した値が優先される。
@@ -263,6 +269,8 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
       "top_ev": 1.21,
       "picks": [{"combo": "1-3-5", "prob": 0.041, "odds": 29.5, "ev": 1.21}, ...],
       "trio_picks": [{"combo": "1-3-5", "prob": 0.15, "odds": 7.8, "ev": 1.17}, ...],
+      "prob_picks": [...],       # 同じ形。EV順ではなく確率順（推奨ではない）
+      "trio_prob_picks": [...],  # 同上
     }
     market_prob が無い場合は ev を空で返す。
     trifecta_odds（三連単120通り）が無い場合は picks を返さない。
@@ -297,11 +305,19 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
         picks = recommend_trifecta(model_prob, trifecta_odds, weight=BLEND_WEIGHT)
         if picks:
             result["picks"] = picks
+        likely = recommend_trifecta(model_prob, trifecta_odds, limit=PROB_PICKS,
+                                    weight=BLEND_WEIGHT, by="prob")
+        if likely:
+            result["prob_picks"] = likely
 
     if trio_odds:
         trio = recommend_trio(model_prob, trio_odds, weight=BLEND_WEIGHT)
         if trio:
             result["trio_picks"] = trio
+        trio_likely = recommend_trio(model_prob, trio_odds, limit=PROB_PICKS,
+                                     weight=BLEND_WEIGHT, by="prob")
+        if trio_likely:
+            result["trio_prob_picks"] = trio_likely
 
     return result
 
@@ -413,7 +429,8 @@ def blend_with_market(model_prob: dict[int, float],
 def recommend_trifecta(model_prob: dict[int, float],
                        trifecta_odds: dict[str, float],
                        limit: int = TRIFECTA_PICKS,
-                       weight: float = 1.0) -> list[dict]:
+                       weight: float = 1.0,
+                       by: str = "ev") -> list[dict]:
     """
     三連単のオッズと照らし合わせて、EVの高い順に買い目を返す。
 
@@ -428,34 +445,22 @@ def recommend_trifecta(model_prob: dict[int, float],
     そこから展開すると、市場のオッズが持っている着順の相関（まくられた艇が
     3着に残る、といった結びつき）を捨ててしまう。trifecta_probs は補正表で
     その相関を持つようになったが、市場の120通りのほうがまだ精しい。
+
+    by="prob" にすると確率の高い順に切り替わる。**これは推奨買い目ではない。**
+    確率順に並べると、当たりやすい代わりにオッズが低い目（多くは1号艇頭）が
+    上に来るので、EVは1.0を下回るのが普通である。トップページの確率ランキング
+    （券種をまたいで「最も決まりやすい目」を並べる）専用の並びであり、
+    推奨として出す `picks` は EV順のままにすること。
     """
-    probs = trifecta_probs(model_prob)
-    if weight < 1.0:
-        inv = {k: 1.0 / o for k, o in trifecta_odds.items() if o}
-        total = sum(inv.values())
-        if total > 0:
-            market = {k: v / total for k, v in inv.items()}
-            probs = {k: (1 - weight) * market.get(k, 0.0) + weight * p
-                     for k, p in probs.items()}
-    picks = []
-    for combo, p in probs.items():
-        odds = trifecta_odds.get(combo)
-        if not odds:
-            continue
-        picks.append({
-            "combo": combo,
-            "prob": round(p, 5),
-            "odds": float(odds),
-            "ev": round(p * float(odds), 3),
-        })
-    picks.sort(key=lambda x: (-x["ev"], -x["prob"]))
-    return picks[:limit]
+    probs = _pull_to_market(trifecta_probs(model_prob), trifecta_odds, weight)
+    return _rank_combos(probs, trifecta_odds, limit, by)
 
 
 def recommend_trio(model_prob: dict[int, float],
                    trio_odds: dict[str, float],
                    limit: int = TRIO_PICKS,
-                   weight: float = 1.0) -> list[dict]:
+                   weight: float = 1.0,
+                   by: str = "ev") -> list[dict]:
     """
     三連複のオッズと照らし合わせて、EVの高い順に買い目を返す。
 
@@ -466,27 +471,53 @@ def recommend_trio(model_prob: dict[int, float],
     三連単のオッズを畳んだものを使ってはならない。別勘定の投票なので、同じ3艇
     でも2つの市場の見立てはずれる。買うのは三連複のほうなので、合わせる相手も
     三連複でなければ、画面に出るEVがどの市場に対するものか分からなくなる。
+
+    by は recommend_trifecta と同じ。
     """
-    probs = trio_probs(model_prob)
-    if weight < 1.0:
-        inv = {k: 1.0 / o for k, o in trio_odds.items() if o}
-        total = sum(inv.values())
-        if total > 0:
-            market = {k: v / total for k, v in inv.items()}
-            probs = {k: (1 - weight) * market.get(k, 0.0) + weight * p
-                     for k, p in probs.items()}
+    probs = _pull_to_market(trio_probs(model_prob), trio_odds, weight)
+    return _rank_combos(probs, trio_odds, limit, by)
+
+
+def _pull_to_market(probs: dict[str, float], odds: dict[str, float],
+                    weight: float) -> dict[str, float]:
+    """
+    買い目ごとの確率を、**その券種の**オッズが示す確率へ weight ぶん引き戻す。
+    weight が1.0ならモデル単独のまま返す。オッズが空（または全て0）のときも
+    引き戻しようがないので、そのまま返す。
+    """
+    if weight >= 1.0:
+        return probs
+    inv = {k: 1.0 / o for k, o in odds.items() if o}
+    total = sum(inv.values())
+    if total <= 0:
+        return probs
+    market = {k: v / total for k, v in inv.items()}
+    return {k: (1 - weight) * market.get(k, 0.0) + weight * p
+            for k, p in probs.items()}
+
+
+def _rank_combos(probs: dict[str, float], odds: dict[str, float],
+                 limit: int, by: str) -> list[dict]:
+    """
+    確率とオッズを突き合わせて買い目の並びを作る。三連単と三連複で共通。
+    オッズの無い目は落とす（画面に出せるのは実際に払い戻される数字だけ）。
+    by="ev" ならEV順、by="prob" なら確率順。同点は他方で割る。
+    """
     picks = []
     for combo, p in probs.items():
-        odds = trio_odds.get(combo)
-        if not odds:
+        o = odds.get(combo)
+        if not o:
             continue
         picks.append({
             "combo": combo,
             "prob": round(p, 5),
-            "odds": float(odds),
-            "ev": round(p * float(odds), 3),
+            "odds": float(o),
+            "ev": round(p * float(o), 3),
         })
-    picks.sort(key=lambda x: (-x["ev"], -x["prob"]))
+    if by == "prob":
+        picks.sort(key=lambda x: (-x["prob"], -x["ev"]))
+    else:
+        picks.sort(key=lambda x: (-x["ev"], -x["prob"]))
     return picks[:limit]
 
 

@@ -8,6 +8,7 @@ import {
   MiniDivergingBar,
   MiniDivergingScale,
 } from "@/components/Bars";
+import { ProbRanking, rankByProb } from "@/components/ProbRanking";
 import { COURSE_BASE, courseDeviation } from "@/lib/course";
 import type { Race } from "@/lib/types";
 
@@ -84,6 +85,26 @@ export default async function Home({
           .slice(0, 12)
       : [];
 
+  // 確率ランキングの対象レース。
+  // **当日は締切前のレースだけに絞る。** 締切を過ぎた目を「上位10点」として
+  // 並べても買えないので、ランキングとして意味が無い。過去の日付を見て
+  // いるときは絞らない。全レースが締切後なので、絞ると必ず空になる。
+  const rankable = day.venues.flatMap((v) =>
+    v.races
+      .filter((r) =>
+        day.date === today
+          ? Boolean(r.closes_at && r.closes_at >= nowHM && !r.result)
+          : true
+      )
+      .map((r) => ({ venue: v, race: r }))
+  );
+  const trifectaRank = rankByProb(rankable, "prob_picks");
+  const trioRank = rankByProb(rankable, "trio_prob_picks");
+  const rankEmpty =
+    day.date === today
+      ? "締切前のレースで、オッズが取れているものがありません。"
+      : "この日のオッズが取れていないため、算出していません。";
+
   // 尺度(±30pt)の外まで届いている棒があるかどうか。あるときだけ矢羽根の説明を出す。
   const anyDevOverflow = upcoming.some(({ race }) => {
     const d = courseDeviation(race.market_prob, 1);
@@ -106,8 +127,8 @@ export default async function Home({
       <DateNav dates={dates} current={day.date} />
 
       <div className="notice">
-        市場勝率は三連単オッズから逆算した値です。予測モデルは市場オッズに
-        届いていないため、期待値は出していません（<Link href="/about">詳細</Link>）。
+        市場勝率は三連単オッズから逆算した値です。AI予想の確率は、モデルの推定を
+        市場オッズへ引き戻したものを出しています（<Link href="/about">詳細</Link>）。
       </div>
 
       {upcoming.length > 0 && (
@@ -197,6 +218,47 @@ export default async function Home({
           </p>
         </div>
       )}
+
+      <h2 style={{ marginBottom: 4 }}>AI予想 確率ランキング</h2>
+      <p className="sub">
+        {day.date === today ? "締切前のレース" : "この日のレース"}
+        を全場から横断して、モデルが決まりやすいと見ている買い目を券種ごとに
+        10点並べています。
+      </p>
+
+      <ProbRanking
+        date={day.date}
+        title="3連単"
+        note="着順まで当てる120通りのうちの1点です。"
+        rows={trifectaRank}
+        empty={rankEmpty}
+      />
+
+      <ProbRanking
+        date={day.date}
+        title="3連複"
+        note="着順を問わない20通りのうちの1点です。"
+        rows={trioRank}
+        empty={rankEmpty}
+      />
+
+      <p className="muted" style={{ fontSize: 12, marginTop: -6 }}>
+        確率は、モデルの推定を市場オッズへ引き戻した公開確率です（レース詳細の
+        「予測1着率」と同じ経路で作っています）。
+        <strong>確率が高いことと、買って得なことは別です。</strong>
+        決まりやすい目ほどオッズが低いので、期待値（確率 × オッズ）は 1.00 を
+        下回るのが普通です。買うかどうかは確率ではなく期待値で見てください。
+        期待値の高い順の推奨買い目は各レースの詳細に出しています。
+        <br />
+        <strong>3連単と3連複の確率を並べて比べないでください。</strong>
+        的が120通りと20通りなので、3連複の確率が高く出るのは当然です。
+        当たりやすさの差であって、有利さの差ではありません。
+        <br />
+        AI予想は統計モデルによる推定であり、的中や利益を保証するものでは
+        ありません。舟券の購入はご自身の判断と責任でお願いします。20歳未満の
+        方は舟券を購入できません。
+        <Link href="/terms"> 免責事項</Link>
+      </p>
 
       {/*
         「まもなく締切」にも市場評価1位のチップが並ぶので、この凡例が

@@ -347,6 +347,80 @@ class BlendedPicksTest(unittest.TestCase):
         self.assertEqual(a, b)
 
 
+class ProbRankingTest(unittest.TestCase):
+    """
+    トップページの確率ランキング用の並び（by="prob"）を固定する。
+
+    **推奨買い目（EV順）と取り違えると、どちらの画面も静かに壊れる。**
+    確率順は当たりやすい目が並ぶので、推奨として出すと本命ばかりになり、
+    EV順をランキングに出すと「最も確率の高い買い目」と称して穴目が並ぶ。
+    どちらも値域はもっともらしく、画面上は普通に見える。
+    """
+
+    def _odds(self):
+        # RecommendTest と同じ置き方。EVが全部0.75の中で 4-5-6 だけ厚い。
+        # 確率順ならこの細工は効かないので、先頭は本命のままでなければならない。
+        probs = trifecta_probs(PROB)
+        odds = {k: 0.75 / v for k, v in probs.items()}
+        odds["4-5-6"] = odds["4-5-6"] * 3
+        return odds
+
+    def test_prob_order_differs_from_ev_order(self):
+        odds = self._odds()
+        by_ev = recommend_trifecta(PROB, odds, limit=5, by="ev")
+        by_prob = recommend_trifecta(PROB, odds, limit=5, by="prob")
+        self.assertEqual(by_ev[0]["combo"], "4-5-6")
+        self.assertNotEqual(by_prob[0]["combo"], "4-5-6")
+        probs = [p["prob"] for p in by_prob]
+        self.assertEqual(probs, sorted(probs, reverse=True))
+
+    def test_default_stays_ev(self):
+        """既定を確率順に倒さないこと。推奨買い目はEV順である。"""
+        odds = self._odds()
+        self.assertEqual(recommend_trifecta(PROB, odds, limit=1)[0]["combo"], "4-5-6")
+        self.assertEqual(recommend_trio(PROB, {"4-5-6": 200.0, "1-2-3": 1.1},
+                                        limit=1)[0]["combo"], "4-5-6")
+
+    def test_trio_prob_order(self):
+        odds = {k: 0.75 / v for k, v in trio_probs(PROB).items()}
+        picks = recommend_trio(PROB, odds, limit=20, by="prob")
+        self.assertEqual(len(picks), 20)
+        probs = [p["prob"] for p in picks]
+        self.assertEqual(probs, sorted(probs, reverse=True))
+
+    def test_score_race_carries_both_orders(self):
+        racers = ScoreRaceTest.RACERS
+        tri = {k: 0.75 / v for k, v in trifecta_probs(PROB).items()}
+        trio = {k: 0.75 / v for k, v in trio_probs(PROB).items()}
+        scores = score_race(racers, None, trifecta_odds=tri, trio_odds=trio)
+        for key in ("picks", "prob_picks", "trio_picks", "trio_prob_picks"):
+            self.assertIn(key, scores)
+        self.assertEqual([p["combo"] for p in scores["prob_picks"]],
+                         [p["combo"] for p in
+                          recommend_trifecta(scores["model_prob"], tri,
+                                             limit=len(scores["prob_picks"]),
+                                             weight=BLEND_WEIGHT, by="prob")])
+
+    def test_prob_picks_absent_without_odds(self):
+        """オッズが無ければランキングにも出さない。確率だけで並べない。"""
+        scores = score_race(ScoreRaceTest.RACERS, None)
+        self.assertNotIn("prob_picks", scores)
+        self.assertNotIn("trio_prob_picks", scores)
+
+    def test_same_blend_as_recommendations(self):
+        """
+        ランキングと推奨で同じ目に違う確率を出さないこと。
+        引き戻しの重みが片方だけずれると、同じレースの同じ買い目が
+        トップページと詳細画面で違う確率になる。
+        """
+        tri = {k: 0.75 / v for k, v in trifecta_probs(PROB).items()}
+        scores = score_race(ScoreRaceTest.RACERS, None, trifecta_odds=tri)
+        by_combo = {p["combo"]: p["prob"] for p in scores["picks"]}
+        shared = [p for p in scores["prob_picks"] if p["combo"] in by_combo]
+        for pick in shared:
+            self.assertEqual(pick["prob"], by_combo[pick["combo"]])
+
+
 class ScoreRaceTest(unittest.TestCase):
     RACERS = [
         {"lane": i, "class": "B1", "win_rate_all": 5.0, "win_rate_venue": 5.0,

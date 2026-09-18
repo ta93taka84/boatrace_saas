@@ -208,6 +208,13 @@ alter table predictions add column if not exists provisional boolean not null de
 -- （scraper/scoring.py の TRIO_PICKS）。三連複のオッズが取れなかったレースでは NULL。
 alter table predictions add column if not exists trio_picks jsonb;
 
+-- 確率ランキング用の、確率順の上位（scraper/scoring.py の PROB_PICKS）。
+-- picks / trio_picks と同じ形だが、**並びがEV順ではなく確率順であり、
+-- 推奨買い目ではない。** トップページがその日の全レースを横断して
+-- 「最も決まりやすい目」を並べるための材料である。推奨として画面に出さないこと。
+alter table predictions add column if not exists prob_picks jsonb;
+alter table predictions add column if not exists trio_prob_picks jsonb;
+
 create index if not exists predictions_version_idx
   on predictions (model_version, created_at desc);
 

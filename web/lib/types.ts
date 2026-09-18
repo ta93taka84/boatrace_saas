@@ -88,6 +88,14 @@ export interface Race {
    * 取れることがあるので、picks があっても必ずあるとは限らない。
    */
   trio_picks?: TrifectaPick[];
+  /**
+   * 確率の高い順の上位（scoring.py の PROB_PICKS 点）。**推奨買い目ではない。**
+   * トップページがその日の全レースを横断して確率ランキングを作るための材料で、
+   * picks / trio_picks とは並びが違うため、選ばれている目も違う。
+   * 推奨として出さないこと。
+   */
+  prob_picks?: TrifectaPick[];
+  trio_prob_picks?: TrifectaPick[];
   result?: RaceResult;
 }
 

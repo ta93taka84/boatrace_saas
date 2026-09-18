@@ -274,9 +274,10 @@ def _upsert_prediction(cur, race_id, race):
     cur.execute(
         """
         insert into predictions (race_id, model_version, model_prob, ev,
-                                 top_lane, top_ev, picks, trio_picks, pub_prob,
+                                 top_lane, top_ev, picks, trio_picks,
+                                 prob_picks, trio_prob_picks, pub_prob,
                                  blend_weight, provisional, calibrated)
-        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (race_id, model_version) do update set
           model_prob = excluded.model_prob,
           ev         = excluded.ev,
@@ -287,6 +288,9 @@ def _upsert_prediction(cur, race_id, race):
           -- 取れる経路があるので、excluded をそのまま入れると、直前に出した
           -- 三連複の買い目が画面から消える。
           trio_picks   = coalesce(excluded.trio_picks, predictions.trio_picks),
+          prob_picks      = excluded.prob_picks,
+          trio_prob_picks = coalesce(excluded.trio_prob_picks,
+                                     predictions.trio_prob_picks),
           pub_prob     = excluded.pub_prob,
           blend_weight = excluded.blend_weight,
           provisional  = excluded.provisional,
@@ -299,6 +303,8 @@ def _upsert_prediction(cur, race_id, race):
          race.get("top_lane"), race.get("top_ev"),
          Jsonb(race["picks"]) if race.get("picks") else None,
          Jsonb(race["trio_picks"]) if race.get("trio_picks") else None,
+         Jsonb(race["prob_picks"]) if race.get("prob_picks") else None,
+         Jsonb(race["trio_prob_picks"]) if race.get("trio_prob_picks") else None,
          Jsonb(_str_keys(race["pub_prob"])) if race.get("pub_prob") else None,
          race.get("blend_weight"),
          bool(race.get("provisional")),
