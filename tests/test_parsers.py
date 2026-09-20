@@ -316,6 +316,24 @@ class TestScoring(unittest.TestCase):
         for lane, ev in scored["ev"].items():
             self.assertAlmostEqual(ev, 0.75, delta=0.01, msg=f"lane {lane}")
 
+    def test_blend_weight_records_what_actually_happened(self):
+        """
+        記録する重みは、実際に効いた値であること。重みはモデル側の取り分
+        なので、市場オッズが無ければ 1.0（モデル単独）になる。常に
+        BLEND_WEIGHT を書いていると、オッズの無いレースが「市場8割で出した」
+        と記録され、あとから成績を追うときの前提が壊れる。
+        """
+        from scraper.scoring import BLEND_WEIGHT
+
+        racers = self._racers()
+        alone = score_race(racers, None)
+        self.assertEqual(alone["blend_weight"], 1.0)
+        self.assertEqual(alone["pub_prob"], alone["model_prob"],
+                         "市場が無いのに引き戻している")
+
+        blended = score_race(racers, {i: 1 / 6 for i in range(1, 7)})
+        self.assertEqual(blended["blend_weight"], BLEND_WEIGHT)
+
     def test_ev_differs_per_lane(self):
         """
         全艇同値になる計算式の破綻を防ぐ。市場が均等配分なら、

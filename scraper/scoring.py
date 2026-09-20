@@ -289,7 +289,12 @@ def score_race(racers: list[dict], market_prob: dict[int, float] | None,
     pub_prob = (blend_with_market(model_prob, market_prob, BLEND_WEIGHT)
                 if market_prob else model_prob)
     result["pub_prob"] = pub_prob
-    result["blend_weight"] = BLEND_WEIGHT
+    # **実際に効いた重みを記録する。** 重みはモデル側の取り分なので、
+    # 市場オッズが無い時間帯は 1.0（モデル単独）である。ここを常に
+    # BLEND_WEIGHT にしていたため、オッズの無い2割のレースが「市場8割・
+    # モデル2割で出した」と記録されていた（2026-09-20 に修正）。あとから
+    # 成績を追うときの前提が壊れるので、`calibrated` と同じく事実を刻む。
+    result["blend_weight"] = BLEND_WEIGHT if market_prob else 1.0
 
     if market_prob:
         ev = {}
