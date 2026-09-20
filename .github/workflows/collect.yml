@@ -29,6 +29,18 @@ name: collect
 #
 # results は遅延で日付が変わっても前日を対象にするようjobs.py側で判定している。
 #
+# morning-odds は、その日の第1レースが始まる前に全レースのオッズを揃える。
+# 最も早い締切は毎日 08:32（モーニング開催。直近8日すべて）なので、
+# 目標は 08:22 になる。**cron の発火時刻ではこれを保証できない。**
+# 09:00 JST 指定の cron は実測で7日連続で 10:45〜11:00 に発火している。
+# そこで 04:23 という早い時刻に、かつ奇数分に置いてある（毎時:00 や :30 は
+# 混雑して間引かれやすい）。遅れても 08:22 までに入れば間に合う、という
+# 余裕の取り方であって、確約ではない。確実にするには外部から
+# workflow_dispatch を叩く必要がある。
+#
+# オッズがまだ発売前の時間帯は、先頭数レースを当たりに使ってその周を畳む（jobs.py
+# の MORNING_ODDS_MISS_STREAK）。畳まないと、何も返らない往復を毎周180回送ることになる。
+#
 # tomorrow は翌日の出走表を取り、予測確率だけを先に出す。三連単のオッズは
 # 前日には公開されないので、期待値と買い目は出せない。市場へ引き戻す先も
 # 無いためモデル単独の生の値になる。画面はその印（provisional）を見て
@@ -41,6 +53,7 @@ name: collect
 on:
   schedule:
     - cron: '0 0 * * *'        # 09:00 JST 出走表
+    - cron: '23 19 * * *'      # 04:23 JST 全レースのオッズを第1レース前に揃える
     - cron: '30 0 * * *'       # 09:30 JST 直前情報ループ → 13:30 まで
     - cron: '30 4 * * *'       # 13:30 JST 直前情報ループ → 17:30 まで
     - cron: '30 8 * * *'       # 17:30 JST 直前情報ループ → 21:40 まで
@@ -54,7 +67,7 @@ on:
         default: prerace
         type: choice
         # prerace は1回だけ走る動作確認用。本番は prerace-loop。
-        options: [morning, prerace, prerace-loop, results, tomorrow]
+        options: [morning, morning-odds, prerace, prerace-loop, results, tomorrow]
       until:
         # cronが飛んだ時間帯を手動で埋めるときに使う。既定のまま昼過ぎに
         # 起動すると6時間の上限に当たって打ち切られるので、次の定時起動の
@@ -105,6 +118,7 @@ jobs:
           else
             case "${{ github.event.schedule }}" in
               '0 0 * * *')   echo "job=morning" >> "$GITHUB_OUTPUT" ;;
+              '23 19 * * *') echo "job=morning-odds" >> "$GITHUB_OUTPUT" ;;
               '0 13 * * *')  echo "job=results" >> "$GITHUB_OUTPUT" ;;
               '30 13 * * *') echo "job=tomorrow" >> "$GITHUB_OUTPUT" ;;
               '30 0 * * *')  echo "job=prerace-loop" >> "$GITHUB_OUTPUT"
@@ -151,6 +165,11 @@ jobs:
             prerace-loop)
               python jobs.py prerace-loop --until '${{ steps.pick.outputs.until }}' --interval 15 --window 30 "$DATE"
               ;;
+            morning-odds)
+              # 第1レースが始まる前に、その日の全レースのオッズを揃える。
+              # 終了時刻は jobs.py 側が第1レースの締切から求めるので渡さない。
+              python jobs.py morning-odds --interval 20 "$DATE"
+              ;;
             prerace)
               # 1回だけ走る動作確認用。本番のスケジュールは prerace-loop。
               python jobs.py prerace --window 40 "$DATE"
@@ -180,7 +199,7 @@ jobs:
       # オッズは時系列として追記されるテーブルなので、同じファイルを二度
       # 通すと同じ値のスナップショットが重複して積まれる。
       - name: Supabaseへ取り込み
-        if: env.DATABASE_URL != '' && steps.pick.outputs.job != 'prerace-loop'
+        if: env.DATABASE_URL != '' && steps.pick.outputs.job != 'prerace-loop' && steps.pick.outputs.job != 'morning-odds'
         run: python -m db.loader "output/${{ steps.date.outputs.date }}.json"
 
       # 取得結果はリポジトリにコミットしない。公式サイトのデータを
@@ -211,7 +230,9 @@ jobs:
       #
       # 暴走への歯止めを3つ置いている。連鎖する仕組みは、失敗が高速で
       # 繰り返されると実行時間と公式サイトへの負荷を際限なく使うため。
-      #   - 開催時間帯（09:00〜21:40）の外では予約しない
+      #   - 開催時間帯（08:00〜21:40）の外では予約しない
+      #     （最も早い締切はモーニング開催の 08:32。朝の一括取得が
+      #     その直前に終わるので、下限を 09:00 に置くと連鎖が始まらない）
       #   - results からは予約しない（その日の最後のジョブなので）
       #   - 10分未満で終わった実行からは予約しない。すぐ落ちる状態で
       #     連鎖すると、1分ごとに起動を繰り返すことになる
@@ -232,7 +253,7 @@ jobs:
           fi
 
           NOW=$(date +%H%M)
-          if [ "$NOW" -lt 900 ] || [ "$NOW" -ge 2140 ]; then
+          if [ "$NOW" -lt 800 ] || [ "$NOW" -ge 2140 ]; then
             echo "開催時間帯の外（現在 $NOW）なので予約しない"
             exit 0
           fi

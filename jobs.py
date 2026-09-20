@@ -8,6 +8,7 @@ GitHub Actionsの無料枠(private 2,000分/月)を使い切る。そのため
   morning      : その日の全レースの出走表を取得（1日1回）
   prerace      : 締切がN分以内のレースだけ直前情報とオッズを取得（1回だけ）
   prerace-loop : preraceを指定時刻まで繰り返す。本番のスケジュールはこちら。
+  morning-odds : その日の第1レースが始まる前に、全レースのオッズを揃える。
   results      : 確定結果を取得（1日1回）。実行が深夜〜昼にずれ込んだ場合は
                  前日を対象にする。GitHubのスケジュールは数時間遅れうるため。
 
@@ -20,6 +21,7 @@ GitHub Actionsの無料枠(private 2,000分/月)を使い切る。そのため
   py -3 jobs.py morning
   py -3 jobs.py prerace --window 40
   py -3 jobs.py prerace-loop --until 21:40 --interval 15 --window 30
+  py -3 jobs.py morning-odds --interval 20
   py -3 jobs.py results [YYYYMMDD]
   py -3 jobs.py target-date results   # 対象日だけを出力する
 """
@@ -50,6 +52,25 @@ RACE_COUNT = 12
 # 風速・波高は開催中に変わり、モデルはその2つを使っている。巡回間隔と
 # 同じ値にしてあるので、最後の1周だけが取り直す形になる。
 BEFOREINFO_REFRESH_MIN = 15
+
+# 締切までこれ以上の余裕があるレースでは直前情報を取りに行かない。
+# 展示タイムも気象も締切の30分前あたりまで出ないので、朝の一括取得で
+# 全レース分を叩くと、1レースあたり1リクエストがまるごと無駄になる。
+# 180レースなら6分ぶんの空打ちで、その間ほかのレースが取れない。
+# 通常の巡回は窓が30分なので、この値には掛からない。
+BEFOREINFO_MAX_LEAD_MIN = 90
+
+# 朝の一括取得が、第1レースの締切の何分前に終わっていてほしいか。
+# 「第1レースが始まる前に、その日の買い目が画面に出ている」状態を作るための値。
+MORNING_ODDS_MARGIN_MIN = 10
+
+# 朝の一括取得で、先頭から何レース続けてオッズが取れなかったらその周を諦めるか。
+#
+# **発売前に180レースを叩き切ってはいけない。** 1周12分の空振りを発売開始まで
+# 繰り返すと、何も返らないリクエストを何百回も公式サイトへ送ることになる。
+# 対象は締切の早い順に並んでいるので、先頭が発売前なら後ろはもっと発売前である。
+# 先頭数レースを当たりに使い、駄目ならその周を畳んで次の周まで待つ。
+MORNING_ODDS_MISS_STREAK = 6
 
 
 def _use_utf8_stdio():
@@ -276,9 +297,23 @@ def tomorrow(date_str: str = None):
 
 
 def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
-            report_late: bool = True) -> list:
+            report_late: bool = True, only_missing: bool = False,
+            require_odds: bool = True, miss_streak_limit: int = 0) -> list:
     """
     締切が window_min 分以内に迫ったレースだけ直前情報とオッズを取る。
+
+    only_missing=True にすると、まだオッズを持っていないレースだけを対象にする。
+    朝の一括取得（morning-odds）が繰り返し呼ぶための形で、2周目以降は
+    前の周で取れたレースを叩き直さない。
+
+    require_odds=False にすると、オッズが無いことを問題として数えない。
+    **朝は発売前のレースがあるのが正常である。** 既定の True のままだと、
+    発売前の180レースがそのまま180件の異常になり、通知が毎朝鳴る。
+    「通知が来なければ正常」という運用前提のほうが先に壊れる。
+
+    miss_streak_limit を正の値にすると、オッズがその回数連続で取れなかった
+    時点でその周を終える。発売前の時間帯に全レースを叩き切らないための歯止めで、
+    公式サイトへの無駄な往復を数百回分削る。
 
     strict=False にすると欠損があっても異常終了せず、問題の一覧を返すだけにする。
     ループ実行の途中で落とすと、その日の残り時間の収集がまるごと失われるため。
@@ -309,8 +344,11 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
     for venue, times in schedule:
         for rno, hhmm in times.items():
             close_at = datetime.combine(now.date(), datetime.strptime(hhmm, "%H:%M").time())
-            if now <= close_at <= deadline:
-                targets.append((close_at, venue, rno, hhmm))
+            if not now <= close_at <= deadline:
+                continue
+            if only_missing and _has_odds(_find_slot(data, venue["code"], rno)):
+                continue
+            targets.append((close_at, venue, rno, hhmm))
 
     # **締切の早い順に取る。** 場ごとに並べたままだと、2分後に締切のレースが
     # 10レース待ちの最後尾に回ることがある。1レースあたり数秒かかるので、
@@ -328,7 +366,10 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
     leads = []
     odds_got = 0
     trio_got = 0
+    visited = []
+    misses = 0
     for venue, rno, hhmm in targets:
+        visited.append((venue, rno, hhmm))
         slot = _race_slot(data, venue, rno)
         slot["closes_at"] = hhmm
 
@@ -354,7 +395,11 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
         # **ただし締切間際は必ず取り直す。** 風速と波高は開催中に変わるし、
         # モデルはその2つを特徴量に使っている。揃った時点の気象で固定すると、
         # 最後の予測が30分前の水面を見て出されることになる。
-        need_before = (not _has_beforeinfo(slot)) or lead <= BEFOREINFO_REFRESH_MIN
+        # **締切がまだ遠いレースには取りに行かない。** 展示も気象もその時刻には
+        # 出ていないので、空振りに1リクエスト使うだけになる。朝の一括取得で効く。
+        need_before = (
+            (not _has_beforeinfo(slot)) and lead <= BEFOREINFO_MAX_LEAD_MIN
+        ) or lead <= BEFOREINFO_REFRESH_MIN
         before = get_beforeinfo(date_str, venue["code"], rno) if need_before else None
         if before:
             slot["conditions"] = {
@@ -373,6 +418,9 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
             slot["overround"] = odds["overround"]
             slot["odds"] = odds["odds"]
             odds_got += 1
+            misses = 0
+        else:
+            misses += 1
 
         # 三連複は別ページなので1リクエスト増える。**ここで例外を握るのは、
         # 三連複が取れないことで三連単の予測まで失わせないため。** 買い目の
@@ -406,6 +454,14 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
         print(f"  {venue['name']} {rno}R (締切{hhmm}) 取得完了")
         _save(data)
 
+        # **発売前に全レースを叩き切らない。** 対象は締切の早い順なので、
+        # 先頭が発売前なら後ろはもっと発売前である。ここで畳んで次の周に回す。
+        if miss_streak_limit and misses >= miss_streak_limit:
+            print(f"  オッズが{misses}レース続けて取れないので、この周は"
+                  f"ここで畳む（残り{len(targets) - len(visited)}レース）。"
+                  f"まだ発売前とみなす。")
+            break
+
     # 締切を過ぎたレースの結果を、同じパスの中で取り込む。画面へ出るまでの
     # 遅れが「夜まで」から「巡回の間隔」に縮まる。
     finished = collect_finished(data, date_str, schedule)
@@ -415,16 +471,23 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
 
     if leads:
         ordered = sorted(leads)
-        print(f"直前情報取得完了: {len(targets)}レース "
+        print(f"直前情報取得完了: {len(visited)}レース "
               f"(締切までの余裕 中央値{ordered[len(ordered) // 2]:.0f}分 / "
               f"最小{ordered[0]:.0f}分)")
     else:
-        print(f"直前情報取得完了: {len(targets)}レース")
-    problems = _healthcheck(data, targets)
+        print(f"直前情報取得完了: {len(visited)}レース")
+    # 畳んだ周では、回らなかったレースを検査対象にしない。行っていない
+    # レースを「取れていない」と数えると、問題の件数が実態とずれる。
+    problems = _healthcheck(data, visited, require_odds=require_odds)
     # 三連単が取れているのに三連複が1件も取れないのは、通信の問題ではなく
     # odds3f の組版が変わった印。上の except が個々の失敗を握るので、
     # ここで数えないと三連複の買い目が静かに画面から消え続ける。
-    if odds_got and not trio_got:
+    # ただし朝の一括取得（require_odds=False）では数えない。**三連単のほうが
+    # 三連複より先に発売される。** 2026-09-20 の実測で、07:06のパスは三連単だけ
+    # 1レース取れて三連複は0件だった。組版の変化ではなく発売の時間差である。
+    # 発売前と壊れたを区別できない以上、ここで鳴らすと毎朝の定例になり、
+    # 本物の組版変化が埋もれる。通常の巡回では従来どおり数える。
+    if require_odds and odds_got and not trio_got:
         problems.append(f"三連単は{odds_got}レース取れたが三連複が1件も取れない。"
                         "odds3f の組版が変わった可能性がある。")
         print(f"  [異常] {problems[-1]}")
@@ -436,6 +499,26 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
     if problems and strict:
         sys.exit(1)
     return problems
+
+
+def _find_slot(data: dict, venue_code: str, race_no: int) -> dict | None:
+    """会場・レースの入れ物を探す。無くても作らない（_race_slot との違い）。"""
+    venue = next((v for v in data["venues"] if v["code"] == venue_code), None)
+    if venue is None:
+        return None
+    return next((r for r in venue["races"] if r["race_no"] == race_no), None)
+
+
+def _has_odds(slot: dict | None) -> bool:
+    """
+    そのレースの三連単・三連複オッズが両方そろっているか。
+
+    **片方だけでは「取れた」としない。** 三連複は別ページなので片方だけ
+    取れることがあり、そこで打ち切ると三連複の買い目が一日中欠けたままになる。
+    """
+    if not slot:
+        return False
+    return bool(slot.get("odds")) and bool(slot.get("trio_odds"))
 
 
 def _has_beforeinfo(slot: dict) -> bool:
@@ -496,7 +579,7 @@ def _racer_problems(label: str, racers: list) -> list:
     return problems
 
 
-def _healthcheck(data: dict, targets: list) -> list:
+def _healthcheck(data: dict, targets: list, require_odds: bool = True) -> list:
     """
     取得できたはずの項目が欠けていないか検証し、問題の一覧を返す。
     ジョブが例外なく完走しても中身が空、という劣化を検知するのが目的。
@@ -517,7 +600,8 @@ def _healthcheck(data: dict, targets: list) -> list:
             problems.append(f"{venue['name']} {rno}R: 出走表が{len(slot.get('racers', []))}艇")
         problems += _racer_problems(f"{venue['name']} {rno}R", slot.get("racers", []))
         if not slot.get("market_prob"):
-            problems.append(f"{venue['name']} {rno}R: オッズ未取得")
+            if require_odds:
+                problems.append(f"{venue['name']} {rno}R: オッズ未取得")
         else:
             # 正常値は約1.334(=1/0.75)。外れていればオッズの取りこぼし。
             over = slot.get("overround") or 0
@@ -686,6 +770,150 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
         print(f"[警告] 通信エラー {len(pass_errors)}件は一過性とみなした"
               f"（連続 {worst_streak} < {LOOP_OUTAGE_STREAK}、"
               f"成功 {succeeded}パス）。失敗にはしない。")
+
+
+def morning_odds(interval_min: int = 20, date_str: str = None,
+                 until_hhmm: str = None) -> None:
+    """
+    その日の第1レースが始まる前に、全レースのオッズを揃える。
+
+    通常の巡回（prerace-loop）は締切30分前の窓でしか取らない。締切間際の
+    オッズほど市場の最終評価に近いという理由でそうしてあり、その方針は
+    変えない。**このジョブが足すのは「朝の時点の一枚」である。**
+    オッズは追記専用の時系列なので、朝の一枚を足しても締切前の一枚は
+    そのまま入り、画面は常に最新を出す。
+
+    朝のオッズは投票が薄く、締切前とは別の数字になる。それでも入れるのは、
+    第1レースが始まる時点で、その日の全レースの買い目が画面に出ている
+    状態を作るため（2026-09-19、ユーザーの指定）。
+
+    **落とすのは「相手が答えなかった」ときだけで、「取れなかった」ときではない。**
+    発売前のレースがあるのは正常であり、1レースも取れない朝もありうる
+    （2026-09-19 に置き換えた。以前は取得0件を異常として落としていた）。
+    オッズの発売が第1レースの締切より後に始まるなら、その判定では毎朝失敗し、
+    「通知が来なければ正常」という運用前提のほうが先に壊れる。
+    **オッズページが壊れた場合は同じ日の prerace-loop が必ず失敗する**ので、
+    不具合の検知はそちらが担う。ここでの0件は不具合の印ではなく、
+    「朝に取れる」という前提が外れている印である。前提が外れているなら、
+    毎朝鳴らすのではなく cron から降ろすのが正しい対応になる。
+
+    終了条件は2つ。全レース揃ったら即座に抜ける（揃った後も回り続けると
+    ランナーを占有するだけ）。揃わなければ、第1レースの締切
+    MORNING_ODDS_MARGIN_MIN 分前まで繰り返す。起動がそれより遅れていた
+    場合は1周だけ回して終える（遅れて起動されても、取れるものは取る）。
+    """
+    date_str = date_str or _today()
+    schedule = _close_schedule(date_str)
+    if not schedule:
+        print(f"[異常] {date_str}: {NO_VENUE_HINT}")
+        sys.exit(1)
+
+    today = datetime.now().date()
+    closes = [
+        datetime.combine(today, datetime.strptime(hhmm, "%H:%M").time())
+        for _, times in schedule for hhmm in times.values()
+    ]
+    if until_hhmm:
+        end = datetime.combine(today, datetime.strptime(until_hhmm, "%H:%M").time())
+    else:
+        end = min(closes) - timedelta(minutes=MORNING_ODDS_MARGIN_MIN)
+
+    print(f"[{date_str}] 朝の一括取得 {len(closes)}レース / "
+          f"第1レース締切 {min(closes):%H:%M} / 目標 {end:%H:%M}")
+
+    passes = 0
+    errors = []
+    consecutive = 0
+    worst_streak = 0
+    first_odds_at = None
+    got = 0
+    pending = []
+    while True:
+        passes += 1
+        # **パスの開始時刻を控える。** 1周は168レースで約76分かかる
+        # （2026-09-20 実測）。取得できた時刻をパスの終了後に採ると、
+        # 発売開始を1時間以上あとにずらして記録することになる。
+        pass_started = datetime.now()
+        print()
+        print(f"--- 一括取得 pass {passes} ({pass_started:%H:%M}) ---")
+        try:
+            prerace(window_min=24 * 60, date_str=date_str, strict=False,
+                    report_late=False, only_missing=True, require_odds=False,
+                    miss_streak_limit=MORNING_ODDS_MISS_STREAK)
+            print(f"  {_sync_to_db(date_str)}")
+            consecutive = 0
+        except Exception as e:                      # noqa: BLE001
+            print(f"[警告] pass {passes} が失敗した: {e}")
+            errors.append(f"pass {passes} が例外で失敗: {e}")
+            consecutive += 1
+            worst_streak = max(worst_streak, consecutive)
+
+        data = _load(date_str)
+        now = datetime.now()
+        pending = [
+            (venue["name"], rno, hhmm)
+            for venue, times in schedule for rno, hhmm in times.items()
+            if datetime.combine(today, datetime.strptime(hhmm, "%H:%M").time()) > now
+            and not _has_odds(_find_slot(data, venue["code"], rno))
+        ]
+        got = sum(
+            1 for venue, times in schedule for rno in times
+            if _has_odds(_find_slot(data, venue["code"], rno))
+        )
+        if got and first_odds_at is None:
+            first_odds_at = pass_started
+        print(f"  取得済み {got}レース / 未取得（締切前）{len(pending)}レース")
+
+        if not pending:
+            print("全レース揃ったので終了する")
+            break
+        remaining = (end - datetime.now()).total_seconds()
+        if remaining <= 0:
+            print(f"目標 {end:%H:%M} を過ぎたので終了する")
+            break
+        time.sleep(min(interval_min * 60, remaining))
+
+    succeeded = passes - len(errors)
+    first = f"{first_odds_at:%H:%M}" if first_odds_at else "なし"
+    print()
+    print(f"一括取得終了: {passes}パス（成功 {succeeded}） / 取得 {got}レース /"
+          f" 初めて取れた時刻 {first} /"
+          f" 通信エラー {len(errors)}件（最長連続 {worst_streak}）")
+
+    _report(errors, "通信エラー")
+    if pending:
+        print(f"[注意] {len(pending)}レースがまだ発売前か取得できていない:")
+        for name, rno, hhmm in pending[:10]:
+            print(f"    - {name} {rno}R (締切{hhmm})")
+
+    # **「朝に取れるか」を毎日測って残す。** オッズの発売開始時刻は実測して
+    # いない。失敗にしない代わりにここへ書き溜める。0件の日が続くなら、
+    # この仕事は目的を果たせていないので cron から降ろす判断材料になる。
+    data = _load(date_str)
+    data["morning_sweep"] = {
+        "passes": passes,
+        "succeeded": succeeded,
+        "got": got,
+        "first_odds_at": f"{first_odds_at:%H:%M}" if first_odds_at else None,
+        "ended_at": f"{datetime.now():%H:%M}",
+    }
+    _save(data)
+
+    # **落とす条件は「相手が答えなかった」ことに限る。** prerace-loop の
+    # 3条件と同じ形だが、「取り方の問題」に当たるものがここには無い。
+    # 締切後の取得は起こりえず（朝は締切のはるか前）、オッズの欠落は
+    # 発売前と区別できないためである。区別できない以上、疑わしきを
+    # 失敗にすると毎朝鳴る（2026-09-19、それで0件失敗を取り消した）。
+    reasons = []
+    if passes and succeeded == 0:
+        reasons.append(f"{passes}パスすべてが失敗（サイトへ一度も到達できていない）")
+    if worst_streak >= LOOP_OUTAGE_STREAK:
+        reasons.append(f"通信エラーが{worst_streak}パス連続"
+                       f"（{LOOP_OUTAGE_STREAK}以上は一過性ではない）")
+
+    if reasons:
+        print("[異常] " + " / ".join(reasons))
+        sys.exit(1)
 
 
 def _report(items: list, label: str) -> None:
@@ -860,6 +1088,9 @@ if __name__ == "__main__":
         morning(date_arg)
     elif cmd == "prerace":
         prerace(window, date_arg)
+    elif cmd == "morning-odds":
+        morning_odds(int(opt("--interval", "20")), date_arg,
+                     opt("--until", None))
     elif cmd == "prerace-loop":
         prerace_loop(until, interval, window, date_arg)
     elif cmd == "tomorrow":

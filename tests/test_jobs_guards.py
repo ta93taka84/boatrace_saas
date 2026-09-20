@@ -653,3 +653,347 @@ class LoopFailureClassification(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             self._run([[], ["江戸川 3R: 締切後に取得"], []])
         self.assertEqual(cm.exception.code, 1)
+
+
+ODDS = {"market_prob": {i: 1 / 6 for i in range(1, 7)},
+        "overround": 1.335, "odds": {"1-2-3": 9.6}}
+TRIO = {"1-2-3": 4.3}
+RACERS = [{"lane": i, "class": "B1", "win_rate_all": 5.0,
+           "win_rate_venue": 5.0, "avg_st": 0.16, "motor_in2_rate": 35.0,
+           "boat_in2_rate": 35.0, "weight": 52.0, "f_count": 0,
+           "in2_rate_all": 30.0} for i in range(1, 7)]
+
+
+def _scrapers(stack, times, data, odds=None, trio=None, before=None):
+    """jobs が触る外部の取得関数をまとめて差し替える。"""
+    venue = {"code": "05", "name": "多摩川"}
+    patches = {
+        "get_active_venues": mock.patch.object(
+            jobs, "get_active_venues", return_value=[venue]),
+        "get_close_times": mock.patch.object(
+            jobs, "get_close_times", return_value=times),
+        "get_beforeinfo": mock.patch.object(
+            jobs, "get_beforeinfo",
+            side_effect=before if before else lambda *a: None),
+        "get_racelist": mock.patch.object(jobs, "get_racelist", return_value=None),
+        "get_odds": mock.patch.object(
+            jobs, "get_odds", side_effect=odds if odds else lambda *a: None),
+        "get_trio_odds": mock.patch.object(
+            jobs, "get_trio_odds", side_effect=trio if trio else lambda *a: None),
+        "_load": mock.patch.object(jobs, "_load", return_value=data),
+        "_save": mock.patch.object(jobs, "_save"),
+    }
+    for p in patches.values():
+        stack.enter_context(p)
+
+
+class MorningSweepTargets(unittest.TestCase):
+    """
+    朝の一括取得が対象を絞る2つの規則。
+
+    **どちらも公式サイトへの空打ちを減らすためにある。** 全レース分を
+    毎周叩き直すと、1周に十数分かかって第1レースに間に合わない。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, races, times, sold=True, **kw):
+        from contextlib import ExitStack
+
+        data = {"venues": [{"code": "05", "name": "多摩川", "races": races}]}
+        calls = {"odds": [], "before": []}
+        with ExitStack() as stack:
+            _scrapers(
+                stack, times, data,
+                odds=lambda d, c, r: calls["odds"].append(r) or (ODDS if sold else None),
+                trio=lambda d, c, r: TRIO if sold else None,
+                before=lambda d, c, r: calls["before"].append(r) or None,
+            )
+            jobs.prerace(24 * 60, "20260919", strict=False,
+                         report_late=False, **kw)
+        return calls
+
+    def test_only_missing_skips_races_that_already_have_odds(self):
+        """
+        2周目以降、前の周で取れたレースを叩き直さないこと。
+        叩き直すと、まだ発売前だったレースへ回る時間が無くなる。
+        """
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        times = {1: (now + timedelta(minutes=70)).strftime("%H:%M"),
+                 2: (now + timedelta(minutes=100)).strftime("%H:%M")}
+        races = [{"race_no": 1, "racers": RACERS,
+                  "odds": {"1-2-3": 9.6}, "trio_odds": TRIO},
+                 {"race_no": 2, "racers": RACERS}]
+        calls = self._run(races, times, only_missing=True)
+        self.assertEqual(calls["odds"], [2],
+                         "オッズを持っているレースを取り直している")
+
+    def test_half_fetched_race_is_retried(self):
+        """
+        三連単だけ取れて三連複が取れなかったレースは、まだ未完了として扱う。
+        片方で打ち切ると、三連複の買い目が一日中欠けたままになる。
+        """
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        times = {1: (now + timedelta(minutes=70)).strftime("%H:%M")}
+        races = [{"race_no": 1, "racers": RACERS, "odds": {"1-2-3": 9.6}}]
+        calls = self._run(races, times, only_missing=True)
+        self.assertEqual(calls["odds"], [1])
+
+    def test_pass_is_abandoned_after_consecutive_misses(self):
+        """
+        発売前の時間帯に全レースを叩き切らないこと。
+
+        締切の早い順に並んでいるので、先頭が発売前なら後ろはもっと発売前で
+        ある。ここで畳まないと、何も返らないリクエストを毎周180回ぶん
+        公式サイトへ送ることになる。
+        """
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        times = {rno: (now + timedelta(minutes=60 + rno * 5)).strftime("%H:%M")
+                 for rno in range(1, 11)}
+        races = [{"race_no": rno, "racers": RACERS} for rno in range(1, 11)]
+        calls = self._run(races, times, sold=False, miss_streak_limit=3)
+        self.assertEqual(len(calls["odds"]), 3,
+                         "オッズが取れないまま全レースを叩いている")
+
+    def test_beforeinfo_is_not_fetched_for_far_races(self):
+        """
+        締切がまだ遠いレースに直前情報を取りに行かないこと。
+        展示も気象もその時刻には出ておらず、1レース1リクエストを捨てる。
+        """
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        near = (now + timedelta(minutes=20)).strftime("%H:%M")
+        far = (now + timedelta(minutes=jobs.BEFOREINFO_MAX_LEAD_MIN + 60))
+        times = {1: near, 2: far.strftime("%H:%M")}
+        races = [{"race_no": 1, "racers": RACERS}, {"race_no": 2, "racers": RACERS}]
+        calls = self._run(races, times)
+        self.assertEqual(calls["before"], [1],
+                         "締切が遠いレースの直前情報まで取りに行っている")
+
+
+class MorningSweepFailure(unittest.TestCase):
+    """
+    朝の一括取得の失敗判定。
+
+    **発売前のレースがあるのは正常。** そこで落とすと、毎朝180件の異常として
+    通知が鳴り、「通知が来なければ正常」という運用前提のほうが先に壊れる。
+    取得0件そのものをどう扱うかは MorningSweepFailureClassification で固定する。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, odds, trio):
+        from contextlib import ExitStack
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        times = {1: (now + timedelta(minutes=70)).strftime("%H:%M")}
+        data = {"venues": [{"code": "05", "name": "多摩川",
+                            "races": [{"race_no": 1, "racers": RACERS}]}]}
+        with ExitStack() as stack:
+            _scrapers(stack, times, data, odds=odds, trio=trio)
+            stack.enter_context(
+                mock.patch.object(jobs, "_sync_to_db", return_value="取り込み済み"))
+            stack.enter_context(mock.patch.object(jobs.time, "sleep"))
+            # 目標時刻を過ぎた状態で呼び、1周だけ回して終える形にする。
+            jobs.morning_odds(interval_min=1, date_str="20260919",
+                              until_hhmm="00:01")
+        return data
+
+    def _problems(self, require_odds, odds=None, trio=None):
+        from contextlib import ExitStack
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        times = {1: (now + timedelta(minutes=70)).strftime("%H:%M")}
+        data = {"venues": [{"code": "05", "name": "多摩川",
+                            "races": [{"race_no": 1, "racers": RACERS}]}]}
+        with ExitStack() as stack:
+            _scrapers(stack, times, data, odds=odds, trio=trio)
+            return jobs.prerace(24 * 60, "20260919", strict=False,
+                                report_late=False, require_odds=require_odds)
+
+    def test_missing_odds_is_not_a_problem_in_sweep_mode(self):
+        self.assertEqual(
+            [p for p in self._problems(require_odds=False) if "オッズ" in p], [],
+            "発売前のレースを異常として数えている")
+
+    def test_trio_gap_is_not_a_layout_change_in_sweep_mode(self):
+        """
+        **三連単のほうが三連複より先に発売される。** 2026-09-20 の実測で、
+        07:06のパスは三連単だけ1レース取れて三連複は0件だった。これを
+        「odds3f の組版が変わった」と数えると毎朝の定例になり、本物の
+        組版変化が埋もれる。
+        """
+        problems = self._problems(require_odds=False,
+                                  odds=lambda *a: ODDS, trio=lambda *a: None)
+        self.assertEqual([p for p in problems if "組版" in p], [])
+
+    def test_trio_gap_is_still_a_layout_change_for_the_normal_loop(self):
+        """締切30分前に三連複だけ取れないのは、発売の時間差では説明できない。"""
+        problems = self._problems(require_odds=True,
+                                  odds=lambda *a: ODDS, trio=lambda *a: None)
+        self.assertTrue([p for p in problems if "組版" in p])
+
+    def test_missing_odds_is_still_a_problem_for_the_normal_loop(self):
+        """
+        通常の巡回では、締切30分前にオッズが無いのは本物の欠損である。
+        朝の都合で緩めた判定が、こちらへ漏れていないことを固定する。
+        """
+        self.assertTrue(
+            [p for p in self._problems(require_odds=True) if "オッズ" in p])
+
+    def test_success_when_odds_arrive(self):
+        data = self._run(odds=lambda *a: ODDS, trio=lambda *a: TRIO)
+        slot = data["venues"][0]["races"][0]
+        self.assertIn("picks", slot)
+        self.assertIn("prob_picks", slot)
+class _Clock:
+    """偽の時計。jobs が見る now を固定し、sleep が呼ばれた分だけ進める。
+
+    朝の一括取得は4時間ぶんのパスを回すので、実時間では試せない。
+    """
+
+    def __init__(self, start):
+        self.t = start
+
+    def advance(self, sec):
+        from datetime import timedelta
+        self.t += timedelta(seconds=sec)
+
+    def install(self, stack):
+        from datetime import datetime
+        clock = self
+
+        class FakeDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock.t
+
+        stack.enter_context(mock.patch.object(jobs, "datetime", FakeDT))
+        stack.enter_context(mock.patch.object(
+            jobs.time, "sleep", side_effect=lambda sec: clock.advance(sec)))
+
+
+class MorningSweepFailureClassification(unittest.TestCase):
+    """
+    朝の一括取得を落とす条件。**「取れなかった」では落とさない。**
+
+    オッズの発売開始時刻は実測していない。もし発売が第1レースの締切より
+    後に始まるなら、取得0件で落とす判定は毎朝失敗を通知することになり、
+    「通知が来なければ正常」という運用前提のほうが先に壊れる。
+    オッズページが壊れた場合は同じ日の prerace-loop が必ず失敗するので、
+    不具合の検知はそちらが担う（2026-09-19、0件失敗を取り消した）。
+
+    落とすのは prerace-loop と同じ「相手が答えなかった」2条件だけ。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _sweep(self, side_effect):
+        """04:23 起動・第1レース締切 09:00 の朝を、偽の時計で1回ぶん回す。"""
+        from contextlib import ExitStack
+        from datetime import datetime
+
+        data = {"date": "20260920",
+                "venues": [{"code": "05", "name": "多摩川",
+                            "races": [{"race_no": 1, "racers": RACERS}]}]}
+        clock = _Clock(datetime(2026, 9, 20, 4, 23))
+        with ExitStack() as stack:
+            for target, kw in [
+                ("get_active_venues", dict(return_value=[{"code": "05",
+                                                          "name": "多摩川"}])),
+                ("get_close_times", dict(return_value={1: "09:00"})),
+                ("_load", dict(return_value=data)),
+                ("_save", dict()),
+                ("_sync_to_db", dict(return_value="取り込み済み")),
+                ("prerace", dict(side_effect=side_effect(data))),
+            ]:
+                stack.enter_context(mock.patch.object(jobs, target, **kw))
+            clock.install(stack)
+            try:
+                jobs.morning_odds(interval_min=20, date_str="20260920")
+            except SystemExit as e:
+                return e.code, data
+        return None, data
+
+    @staticmethod
+    def _pattern(*outcomes):
+        """成功と例外の並びを繰り返す prerace の代役。"""
+        from itertools import cycle
+
+        def factory(data):
+            it = cycle(outcomes)
+
+            def run(*a, **kw):
+                x = next(it)
+                if isinstance(x, Exception):
+                    raise x
+                return []
+            return run
+        return factory
+
+    @staticmethod
+    def _arrives_on(nth):
+        """nパス目でオッズが発売される朝。"""
+        def factory(data):
+            state = {"i": 0}
+
+            def run(*a, **kw):
+                state["i"] += 1
+                if state["i"] >= nth:
+                    slot = data["venues"][0]["races"][0]
+                    slot["odds"] = {"1-2-3": 9.6}
+                    slot["trio_odds"] = TRIO
+                return []
+            return run
+        return factory
+
+    def test_zero_odds_is_not_a_failure(self):
+        """
+        発売が朝に始まらない日は取得0件で終わる。**これで落とさない。**
+        毎朝の通知は、本当の欠測を埋もれさせるほうの害が大きい。
+        """
+        code, data = self._sweep(self._pattern(None))
+        self.assertIsNone(code, "取得0件を失敗にしている")
+        self.assertEqual(data["morning_sweep"]["got"], 0)
+        self.assertIsNone(data["morning_sweep"]["first_odds_at"])
+
+    def test_every_pass_failing_is_a_failure(self):
+        """1パスも成功していないのは、朝のあいだサイトへ到達できていない証拠。"""
+        code, _ = self._sweep(self._pattern(RuntimeError("timeout")))
+        self.assertEqual(code, 1)
+
+    def test_outage_streak_is_a_failure(self):
+        """通信エラーが3パス続くのは一過性ではない。prerace-loop と同じ閾値。"""
+        code, _ = self._sweep(self._pattern(
+            None, *[RuntimeError("timeout")] * jobs.LOOP_OUTAGE_STREAK))
+        self.assertEqual(code, 1)
+
+    def test_transient_errors_are_not_a_failure(self):
+        """散発的なタイムアウトは日常的に起きる。ここで通知すると日常化する。"""
+        code, _ = self._sweep(self._pattern(None, RuntimeError("timeout")))
+        self.assertIsNone(code)
+
+    def test_first_odds_time_is_recorded(self):
+        """
+        **発売開始時刻を毎日残す。** 失敗にしない代わりの歯止めで、
+        0件の日が続くならこの仕事を cron から降ろす判断材料になる。
+        """
+        code, data = self._sweep(self._arrives_on(2))
+        self.assertIsNone(code)
+        self.assertEqual(data["morning_sweep"]["first_odds_at"], "04:43")
+        self.assertEqual(data["morning_sweep"]["got"], 1)
