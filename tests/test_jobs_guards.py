@@ -780,6 +780,49 @@ class MorningSweepTargets(unittest.TestCase):
                          "締切が遠いレースの直前情報まで取りに行っている")
 
 
+class SweepPublishesDuringPass(unittest.TestCase):
+    """
+    長い周の途中でDBへ取り込むこと。
+
+    **取れていても、DBに入るまでは画面に出ない。** 168レースを回る周は
+    実測76分かかる（2026-09-20）。取り込みを周の終わりに1回だけ行うと、
+    最初に取った締切の早いレースが画面へ出ないまま締切を迎える。実際、
+    07:29に取った三国1R（締切08:32）がDBへ入ったのは08:45だった。
+    """
+
+    def setUp(self):
+        jobs._SCHEDULE_CACHE.clear()
+        self.addCleanup(jobs._SCHEDULE_CACHE.clear)
+
+    def _run(self, sync_every):
+        from contextlib import ExitStack
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        times = {r: (now + timedelta(minutes=60 + r * 10)).strftime("%H:%M")
+                 for r in range(1, 7)}
+        data = {"venues": [{"code": "05", "name": "多摩川",
+                            "races": [{"race_no": r, "racers": RACERS}
+                                      for r in range(1, 7)]}]}
+        synced = []
+        with ExitStack() as stack:
+            _scrapers(stack, times, data,
+                      odds=lambda *a: ODDS, trio=lambda *a: TRIO)
+            stack.enter_context(mock.patch.object(
+                jobs, "_sync_to_db",
+                side_effect=lambda d: synced.append(d) or "取り込み済み"))
+            jobs.prerace(24 * 60, "20260920", strict=False, report_late=False,
+                         sync_every=sync_every)
+        return synced
+
+    def test_syncs_every_n_races(self):
+        self.assertEqual(len(self._run(2)), 3, "周の途中で取り込んでいない")
+
+    def test_no_sync_when_not_asked(self):
+        """通常の巡回は1パスが短い。パスの終わりの1回で足りる。"""
+        self.assertEqual(self._run(0), [])
+
+
 class MorningSweepFailure(unittest.TestCase):
     """
     朝の一括取得の失敗判定。

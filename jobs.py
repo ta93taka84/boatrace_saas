@@ -72,6 +72,15 @@ MORNING_ODDS_MARGIN_MIN = 10
 # 先頭数レースを当たりに使い、駄目ならその周を畳んで次の周まで待つ。
 MORNING_ODDS_MISS_STREAK = 6
 
+# 朝の一括取得で、何レースごとにDBへ取り込むか。
+#
+# **取れていても、DBに入るまでは画面に出ない。** 取り込みをパスの終わりに
+# 1回だけ行うと、168レースを回る76分のあいだ、最初に取った締切の早いレースが
+# 画面に出ないまま締切を迎える。2026-09-20、07:29に取った三国1R（締切08:32）が
+# DBへ入ったのは08:45だった。取得は間に合っていたのに、公開は間に合っていない。
+# 通常の巡回は1パスが短いのでこの問題が出ない。
+MORNING_ODDS_SYNC_EVERY = 20
+
 
 def _use_utf8_stdio():
     """
@@ -298,7 +307,8 @@ def tomorrow(date_str: str = None):
 
 def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
             report_late: bool = True, only_missing: bool = False,
-            require_odds: bool = True, miss_streak_limit: int = 0) -> list:
+            require_odds: bool = True, miss_streak_limit: int = 0,
+            sync_every: int = 0) -> list:
     """
     締切が window_min 分以内に迫ったレースだけ直前情報とオッズを取る。
 
@@ -314,6 +324,10 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
     miss_streak_limit を正の値にすると、オッズがその回数連続で取れなかった
     時点でその周を終える。発売前の時間帯に全レースを叩き切らないための歯止めで、
     公式サイトへの無駄な往復を数百回分削る。
+
+    sync_every を正の値にすると、その本数ごとにDBへ取り込む。**取れていても
+    DBに入るまでは画面に出ない。** 1周が長いときに、締切の早いレースが
+    画面へ出ないまま締切を過ぎるのを防ぐ（MORNING_ODDS_SYNC_EVERY を見ること）。
 
     strict=False にすると欠損があっても異常終了せず、問題の一覧を返すだけにする。
     ループ実行の途中で落とすと、その日の残り時間の収集がまるごと失われるため。
@@ -453,6 +467,11 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
 
         print(f"  {venue['name']} {rno}R (締切{hhmm}) 取得完了")
         _save(data)
+
+        # **締切の早い順に取っているので、途中で取り込むほど早く画面へ出る。**
+        # 1周の終わりまで待つと、最初に取ったレースが最も長く待たされる。
+        if sync_every and len(visited) % sync_every == 0:
+            print(f"  {_sync_to_db(date_str)}（{len(visited)}レース時点）")
 
         # **発売前に全レースを叩き切らない。** 対象は締切の早い順なので、
         # 先頭が発売前なら後ろはもっと発売前である。ここで畳んで次の周に回す。
@@ -853,7 +872,8 @@ def morning_odds(interval_min: int = 20, date_str: str = None,
         try:
             prerace(window_min=24 * 60, date_str=date_str, strict=False,
                     report_late=False, only_missing=True, require_odds=False,
-                    miss_streak_limit=MORNING_ODDS_MISS_STREAK)
+                    miss_streak_limit=MORNING_ODDS_MISS_STREAK,
+                    sync_every=MORNING_ODDS_SYNC_EVERY)
             print(f"  {_sync_to_db(date_str)}")
             consecutive = 0
         except Exception as e:                      # noqa: BLE001
