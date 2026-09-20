@@ -818,6 +818,20 @@ def morning_odds(interval_min: int = 20, date_str: str = None,
     else:
         end = min(closes) - timedelta(minutes=MORNING_ODDS_MARGIN_MIN)
 
+    # **第1レースの締切を過ぎてから起動されたら何もしない。** cronは実測で
+    # 1〜4時間遅れるので、04:23指定でも開催中に発火しうる。そこから1周
+    # 回すと、168レースで約76分（2026-09-20 実測）を開催時間帯に使い、
+    # 締切前の収集を担う prerace-loop を後ろへ待たせる（concurrency が
+    # 直列化するため、同時アクセスではなく遅延として出る）。締切を過ぎた
+    # 時点でこの仕事の目的（第1レース前に買い目を出す）は達成できず、
+    # その日のオッズは prerace-loop が締切前に取る。
+    # 手で --until を渡したときは意図した実行なので止めない。
+    if not until_hhmm and datetime.now() >= min(closes):
+        print(f"[{date_str}] 第1レースの締切 {min(closes):%H:%M} を過ぎているので"
+              f"何もしない (現在 {datetime.now():%H:%M})。"
+              f"この時間帯のオッズは prerace-loop が締切前に取る。")
+        return
+
     print(f"[{date_str}] 朝の一括取得 {len(closes)}レース / "
           f"第1レース締切 {min(closes):%H:%M} / 目標 {end:%H:%M}")
 

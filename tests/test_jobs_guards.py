@@ -962,6 +962,33 @@ class MorningSweepFailureClassification(unittest.TestCase):
             return run
         return factory
 
+    def test_late_start_does_nothing(self):
+        """
+        **第1レースの締切を過ぎてから起動されたら何もしない。**
+        cronは1〜4時間遅れるので開催中に発火しうる。そこから168レースを
+        1周すると約76分を開催時間帯に使い、締切前の収集を担う
+        prerace-loop を後ろへ待たせる。目的も既に達成できない。
+        """
+        from contextlib import ExitStack
+        from datetime import datetime
+
+        called = []
+        clock = _Clock(datetime(2026, 9, 20, 9, 30))   # 締切09:00を過ぎている
+        with ExitStack() as stack:
+            for target, kw in [
+                ("get_active_venues", dict(return_value=[{"code": "05",
+                                                          "name": "多摩川"}])),
+                ("get_close_times", dict(return_value={1: "09:00"})),
+                ("_load", dict(return_value={"date": "20260920", "venues": []})),
+                ("_save", dict()),
+                ("_sync_to_db", dict(return_value="")),
+                ("prerace", dict(side_effect=lambda *a, **k: called.append(1))),
+            ]:
+                stack.enter_context(mock.patch.object(jobs, target, **kw))
+            clock.install(stack)
+            jobs.morning_odds(interval_min=20, date_str="20260920")
+        self.assertEqual(called, [], "締切後に起動されて1周回っている")
+
     def test_zero_odds_is_not_a_failure(self):
         """
         発売が朝に始まらない日は取得0件で終わる。**これで落とさない。**
