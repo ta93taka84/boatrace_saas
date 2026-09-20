@@ -1,0 +1,50 @@
+# テストを push と pull request で走らせる。
+#
+# **収集を巻き添えにせずに壊れたコミットへ気づくため。** これまでテストは
+# collect.yml の収集直前でしか走っておらず、壊れたコミットの最初の犠牲が
+# その日の収集だった。通知は失敗時にしか飛ばない運用なので、気づくのは
+# 「収集が落ちた」という形になり、原因の切り分けもそのぶん遠くなる。
+#
+# collect.yml 側のテスト実行は外さないこと。あちらは「パーサーが壊れた状態で
+# 公式サイトを叩かない」ための門であり、こちらとは目的が違う。
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 続けて押したときは古いほうを止める。データを取らないので失うものが無い。
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: テスト
+        run: python -m unittest discover -s tests
+
+      # ワークフローのYAMLが壊れていると、cronが黙って発火しなくなる。
+      # 収集は「何も通知が来なければ正常」で回しているので、これが一番怖い。
+      - name: ワークフローのYAMLを読めること
+        run: |
+          pip install pyyaml
+          python - <<'PY'
+          import glob, io, yaml
+          for f in sorted(glob.glob(".github/workflows/*.yml")):
+              yaml.safe_load(io.open(f, encoding="utf-8").read())
+              print("OK", f)
+          PY

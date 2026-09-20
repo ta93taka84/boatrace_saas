@@ -361,6 +361,11 @@ py -3 -c "import yaml,io; yaml.safe_load(io.open('.github/workflows/collect.yml'
 
 ワークフローを変えたらYAMLのパースを、Pythonを変えたらテストを通すこと。
 
+pushすると `.github/workflows/test.yml` が同じ2つを走らせる（2026-09-20 に
+追加）。**手元で通してから押す決まりは変えない。** CIは取りこぼしの受け皿で
+あって、門は手元にある。それまではテストが `collect.yml` の収集直前でしか
+走っておらず、壊れたコミットの最初の犠牲がその日の収集だった。
+
 ## 上位監査官への報告
 
 このリポジトリは `D:/claude` 配下の1プロジェクトであり、Project ID は **`BR-SAAS`**。
