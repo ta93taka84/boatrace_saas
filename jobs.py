@@ -79,7 +79,8 @@ MORNING_ODDS_MISS_STREAK = 6
 # 画面に出ないまま締切を迎える。2026-09-20、07:29に取った三国1R（締切08:32）が
 # DBへ入ったのは08:45だった。取得は間に合っていたのに、公開は間に合っていない。
 # 通常の巡回は1パスが短いのでこの問題が出ない。
-MORNING_ODDS_SYNC_EVERY = 20
+# 差分取り込みにしたので小さくできる（2026-09-20 に 20 から下げた）。
+MORNING_ODDS_SYNC_EVERY = 5
 
 
 def _use_utf8_stdio():
@@ -382,6 +383,7 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
     trio_got = 0
     visited = []
     misses = 0
+    pending_sync = []
     for venue, rno, hhmm in targets:
         visited.append((venue, rno, hhmm))
         slot = _race_slot(data, venue, rno)
@@ -470,8 +472,13 @@ def prerace(window_min: int = 40, date_str: str = None, strict: bool = True,
 
         # **締切の早い順に取っているので、途中で取り込むほど早く画面へ出る。**
         # 1周の終わりまで待つと、最初に取ったレースが最も長く待たされる。
-        if sync_every and len(visited) % sync_every == 0:
-            print(f"  {_sync_to_db(date_str)}（{len(visited)}レース時点）")
+        # 入れるのは前回からの差分だけ。全体だと1回16秒かかり、周の途中で
+        # 繰り返すと収集そのものが遅れる。
+        pending_sync.append((venue["code"], rno))
+        if sync_every and len(pending_sync) >= sync_every:
+            print(f"  {_sync_to_db(date_str, only=set(pending_sync))}"
+                  f"（{len(pending_sync)}レース）")
+            pending_sync.clear()
 
         # **発売前に全レースを叩き切らない。** 対象は締切の早い順なので、
         # 先頭が発売前なら後ろはもっと発売前である。ここで畳んで次の周に回す。
@@ -639,9 +646,12 @@ def _healthcheck(data: dict, targets: list, require_odds: bool = True) -> list:
     return problems
 
 
-def _sync_to_db(date_str: str) -> str:
+def _sync_to_db(date_str: str, only: set | None = None) -> str:
     """
     その日のJSONをSupabaseへ取り込む。DATABASE_URL が無ければ何もしない。
+
+    only に {(場コード, レース番号), ...} を渡すと、そのレースだけを入れる。
+    1周の途中で公開するための形（全体だと168レースで16秒かかる）。
 
     ループの各パスの直後に呼ぶ。ワークフローの最後にまとめて取り込む形だと、
     4時間走るジョブが終わるまで画面が更新されず、しかも健全性チェックで
@@ -653,8 +663,19 @@ def _sync_to_db(date_str: str) -> str:
         return "DB未設定のため取り込みをスキップ"
     from db.loader import load_pipeline_output
 
-    load_pipeline_output(_path(date_str))
+    load_pipeline_output(_path(date_str), only=only)
     return "取り込み完了"
+
+
+# 通常の巡回で、何レース取り込むごとに公開するか。
+#
+# **取れていても、DBに入るまでは画面に出ない。** 1パスの終わりにまとめて
+# 取り込んでいたので、締切2分前に取ったレースがDBへ入るのはパスの終わり
+# （5〜10分後）になり、締切を過ぎてから画面に出ていた。実測（直近8日・
+# オッズのある1,048レース）で、6%は最初の取り込みが締切後、最後の取り込みから
+# 締切までの余裕は下位10%で −2.4分だった。対象は締切の早い順に取るので、
+# 周の頭を小刻みに出すだけで、この裾が縮む。差分取り込みなので1回は1秒未満。
+LOOP_SYNC_EVERY = 3
 
 
 # 通信エラーが何パス連続したら「一過性ではない」と見なすか。
@@ -733,7 +754,8 @@ def prerace_loop(until_hhmm: str = "21:40", interval_min: int = 15,
             # 1周目の手遅れは起動の遅れによるもので、こちらの取り方の問題では
             # ない。2周目以降で手遅れが出たら、それは順番か間隔の問題である。
             problems = prerace(window_min, date_str, strict=False,
-                               report_late=passes > 1)
+                               report_late=passes > 1,
+                               sync_every=LOOP_SYNC_EVERY)
             data_problems.extend(f"pass {passes}: {x}" for x in problems)
             if problems:
                 print("  ※ 欠損があるが、収集は続行する")

@@ -74,8 +74,15 @@ def _describe_dsn(dsn: str) -> str:
     return "\n".join(lines)
 
 
-def load_pipeline_output(path: Path):
-    """pipeline.py や jobs.py が出力した日次JSONを取り込む。"""
+def load_pipeline_output(path: Path, only: set | None = None):
+    """
+    pipeline.py や jobs.py が出力した日次JSONを取り込む。
+
+    only に {(場コード, レース番号), ...} を渡すと、そのレースだけを取り込む。
+    **公開の遅れを縮めるためにある。** 全体の取り込みは168レースで16秒かかる
+    ので（2026-09-20 実測）、1周の途中で何度も呼べない。取った直後にその
+    レースだけ入れれば、締切間際のレースが締切後に画面へ出る事故が減る。
+    """
     # 締切が近いレースが無い時間帯は prerace が何も書かない。
     # 「取り込むものが無い」は正常な状態なので、失敗にしない。
     # ここで落とすと、異常が無いのに失敗通知が飛んでしまう。
@@ -90,6 +97,13 @@ def load_pipeline_output(path: Path):
         races = entries = odds = preds = finals = same = 0
         for venue in data["venues"]:
             for race in venue["races"]:
+                # only を渡すと、その日の一部だけを取り込む。巡回の途中で
+                # 「いま取ったレースだけ」を公開するために使う。全体の取り込みは
+                # 168レースで16秒かかり（2026-09-20 実測）、1周の途中で何度も
+                # 呼べない。締切の近いレースから順に取っているので、取った直後に
+                # そのレースだけ入れられれば、公開の遅れがそのまま縮む。
+                if only is not None and (venue["code"], race.get("race_no")) not in only:
+                    continue
                 race_id = _upsert_race(cur, race_date, venue["code"], race)
                 races += 1
                 entries += _upsert_entries(cur, race_id, race.get("racers", []))

@@ -810,7 +810,7 @@ class SweepPublishesDuringPass(unittest.TestCase):
                       odds=lambda *a: ODDS, trio=lambda *a: TRIO)
             stack.enter_context(mock.patch.object(
                 jobs, "_sync_to_db",
-                side_effect=lambda d: synced.append(d) or "取り込み済み"))
+                side_effect=lambda d, only=None: synced.append(only) or "取り込み済み"))
             jobs.prerace(24 * 60, "20260920", strict=False, report_late=False,
                          sync_every=sync_every)
         return synced
@@ -818,9 +818,44 @@ class SweepPublishesDuringPass(unittest.TestCase):
     def test_syncs_every_n_races(self):
         self.assertEqual(len(self._run(2)), 3, "周の途中で取り込んでいない")
 
+    def test_syncs_only_the_new_races(self):
+        """
+        入れるのは前回からの差分だけ。**全体の取り込みは168レースで16秒かかる**
+        （2026-09-20 実測）ので、周の途中で全体を入れ直すと収集そのものが遅れる。
+        """
+        synced = self._run(2)
+        self.assertEqual(synced, [{("05", 1), ("05", 2)},
+                                  {("05", 3), ("05", 4)},
+                                  {("05", 5), ("05", 6)}])
+
     def test_no_sync_when_not_asked(self):
-        """通常の巡回は1パスが短い。パスの終わりの1回で足りる。"""
+        """呼ばれていないときは途中で取り込まない。"""
         self.assertEqual(self._run(0), [])
+
+    def test_loop_publishes_during_the_pass(self):
+        """
+        通常の巡回でも途中で公開すること。締切2分前に取ったレースが、
+        パスの終わり（5〜10分後）まで画面に出ないと締切を過ぎる。実測で
+        6%のレースが、最初の取り込み時点で既に締切を過ぎていた。
+        """
+        from contextlib import ExitStack
+        from datetime import datetime
+
+        seen = {}
+        clock = _Clock(datetime(2026, 9, 20, 12, 0))
+        venue = {"code": "05", "name": "多摩川"}
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(
+                jobs, "prerace",
+                side_effect=lambda *a, **kw: seen.update(kw) or []))
+            stack.enter_context(mock.patch.object(
+                jobs, "_close_schedule", return_value=[(venue, {1: "13:00"})]))
+            stack.enter_context(mock.patch.object(jobs, "_sync_to_db",
+                                                  return_value=""))
+            clock.install(stack)
+            jobs.prerace_loop(until_hhmm="12:30", date_str="20260920")
+        self.assertEqual(seen.get("sync_every"), jobs.LOOP_SYNC_EVERY,
+                         "巡回がパスの途中で公開していない")
 
 
 class MorningSweepFailure(unittest.TestCase):
