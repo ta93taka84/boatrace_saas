@@ -24,6 +24,7 @@ GitHub Actionsの無料枠(private 2,000分/月)を使い切る。そのため
   py -3 jobs.py morning-odds --interval 20
   py -3 jobs.py results [YYYYMMDD]
   py -3 jobs.py target-date results   # 対象日だけを出力する
+  py -3 jobs.py last-close [YYYYMMDD]  # その日の最後の締切を出力する
 """
 import io
 import json
@@ -983,6 +984,32 @@ def _report(items: list, label: str) -> None:
         print(f"    ... 他{len(items) - 20}件")
 
 
+def last_close(date_str: str = None) -> str:
+    """
+    その日の最後の締切に、着順が出るまでの余裕を足した時刻。
+
+    **ナイターの最終レースは 21:40 より後に締切を迎える。** 大村は毎日
+    21:51 / 22:20 / 22:45 に締切があり、`prerace-loop --until 21:40` の外に
+    落ちていた。実測（直近9日）で22時台の取得率は 0/6。連鎖の上限を
+    定数で持つのをやめ、その日の開催から決めるためにこの関数を使う。
+
+    **ネットワークに出ない。** 締切時刻は morning が日次JSONへ全レース分
+    書いているので、そこから読む。ワークフローの予約ステップから呼ぶため、
+    ここで開催場一覧を引き直すと1回あたり15リクエストの無駄になる。
+    データが無ければ従来の 21:40 を返す。
+    """
+    date_str = date_str or _today()
+    times = [r["closes_at"] for v in _load(date_str).get("venues", [])
+             for r in v.get("races", []) if r.get("closes_at")]
+    if not times:
+        return "21:40"
+    last = datetime.strptime(max(times), "%H:%M") + timedelta(
+        minutes=RESULT_WAIT_MIN + 9)
+    # 日付をまたぐと、予約側の数値比較（0014 と 現在時刻）が壊れる。
+    # strptime の基準日は1日なので、繰り上がると day が 2 になる。
+    return "23:50" if last.day != 1 else min(f"{last:%H:%M}", "23:50")
+
+
 def _target_result_date() -> str:
     """
     結果を取りに行くべき開催日を返す。
@@ -1140,6 +1167,8 @@ if __name__ == "__main__":
 
     if cmd == "target-date":
         print(_job_date(args[1] if len(args) > 1 else ""))
+    elif cmd == "last-close":
+        print(last_close(date_arg))
     elif cmd == "morning":
         morning(date_arg)
     elif cmd == "prerace":

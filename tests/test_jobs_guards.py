@@ -780,6 +780,39 @@ class MorningSweepTargets(unittest.TestCase):
                          "締切が遠いレースの直前情報まで取りに行っている")
 
 
+class LastCloseFromSchedule(unittest.TestCase):
+    """
+    一日の終わりを、定数ではなくその日の開催から決めること。
+
+    **ナイターの最終レースは 21:40 より後に締切を迎える。** 大村は毎日
+    21:51 / 22:20 / 22:45 に締切があり、`--until 21:40` の外に落ちていた。
+    実測（2026-09-20、直近9日）で22時台の取得率は 0/6 だった。
+    """
+
+    def _last(self, times):
+        data = {"date": "20260920", "venues": [
+            {"code": "24", "name": "大村",
+             "races": [{"race_no": i + 1, "closes_at": t}
+                       for i, t in enumerate(times)]}]}
+        with mock.patch.object(jobs, "_load", return_value=data):
+            return jobs.last_close("20260920")
+
+    def test_uses_the_last_deadline_of_the_day(self):
+        """締切から着順が出るまでの余裕を足す。最終レースの結果まで取るため。"""
+        self.assertEqual(self._last(["21:51", "22:20", "22:45"]), "23:00")
+
+    def test_falls_back_when_no_schedule(self):
+        """出走表をまだ取っていない時間帯は、従来どおり 21:40 にする。"""
+        self.assertEqual(self._last([]), "21:40")
+
+    def test_does_not_cross_midnight(self):
+        """
+        日付をまたぐと、予約側の数値比較（0014 と現在時刻）が壊れて
+        その日の残りが一切予約されなくなる。
+        """
+        self.assertEqual(self._last(["23:45"]), "23:50")
+
+
 class SweepPublishesDuringPass(unittest.TestCase):
     """
     長い周の途中でDBへ取り込むこと。
